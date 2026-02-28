@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { instance } from "@viz-js/viz";
 import type { RunAnnotation, VisitedStage } from "../lib/types";
 
@@ -65,6 +65,113 @@ function parseGitOpsFromDot(dot: string): Map<string, "branch" | "merge"> {
   return result;
 }
 
+// ── Model stylesheet parsing ──────────────────────────────────────────────────
+
+interface ModelRule { model?: string; provider?: string; }
+
+// Distinct color palette for model/provider combos (not overlapping with git op colors)
+const MODEL_PALETTE: Array<{ bg: string; stroke: string; text: string }> = [
+  { bg: "#0c1a2e", stroke: "#38bdf8", text: "#38bdf8" }, // sky
+  { bg: "#2d1657", stroke: "#c084fc", text: "#c084fc" }, // purple
+  { bg: "#422006", stroke: "#fb923c", text: "#fb923c" }, // orange
+  { bg: "#1a2e1a", stroke: "#86efac", text: "#86efac" }, // green
+  { bg: "#1a1a2e", stroke: "#f472b6", text: "#f472b6" }, // pink
+  { bg: "#2e2205", stroke: "#fde047", text: "#fde047" }, // yellow
+  { bg: "#1f1215", stroke: "#f87171", text: "#f87171" }, // red
+];
+
+function parseModelStylesheet(dot: string): Map<string, ModelRule> {
+  const rules = new Map<string, ModelRule>();
+  const match = /model_stylesheet\s*=\s*"([\s\S]*?)"/.exec(dot);
+  if (!match) return rules;
+  const css = match[1];
+  const ruleRe = /([*#.\w][\w.\-]*)\s*\{([^}]+)\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = ruleRe.exec(css)) !== null) {
+    const selector = m[1].trim();
+    const body = m[2];
+    const model    = /llm_model\s*:\s*([\w\-./:]+)/.exec(body)?.[1];
+    const provider = /llm_provider\s*:\s*([\w\-./:]+)/.exec(body)?.[1];
+    if (model || provider) rules.set(selector, { model, provider });
+  }
+  return rules;
+}
+
+export interface NodeModelInfo {
+  model: string;
+  provider: string;
+  colorIdx: number;
+}
+
+export interface ModelLegendEntry {
+  key: string;    // "provider/model"
+  model: string;
+  provider: string;
+  colorIdx: number;
+}
+
+/** Non-LLM shapes — skip model badges for these */
+const NON_LLM_SHAPES = new Set(["parallelogram","diamond","Mdiamond","Msquare","component","doublecircle"]);
+
+function buildNodeModelData(dot: string): {
+  nodeMap: Map<string, NodeModelInfo>;
+  legend: ModelLegendEntry[];
+} {
+  const stylesheet = parseModelStylesheet(dot);
+  if (stylesheet.size === 0) return { nodeMap: new Map(), legend: [] };
+
+  const baseRule = stylesheet.get("*") ?? {};
+
+  /** Resolve the effective model/provider for a node given its class and id */
+  const resolve = (nodeId: string, nodeClass: string | null): ModelRule => {
+    const r: ModelRule = { ...baseRule };
+    // Class selector overrides
+    if (nodeClass) {
+      const cr = stylesheet.get(`.${nodeClass}`) ?? stylesheet.get(nodeClass);
+      if (cr?.model)    r.model    = cr.model;
+      if (cr?.provider) r.provider = cr.provider;
+    }
+    // ID selector overrides (highest priority)
+    const ir = stylesheet.get(`#${nodeId}`);
+    if (ir?.model)    r.model    = ir.model;
+    if (ir?.provider) r.provider = ir.provider;
+    return r;
+  };
+
+  const nodeMap = new Map<string, NodeModelInfo>();
+  const keyToColorIdx = new Map<string, number>();
+  let nextIdx = 0;
+
+  // Parse all node definitions
+  const nodeRe = /(\w+)\s*\[([^\]]+)\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = nodeRe.exec(dot)) !== null) {
+    const nodeId = m[1];
+    const attrs  = m[2];
+    // Skip non-LLM shapes
+    const shape = /shape\s*=\s*(\w+)/.exec(attrs)?.[1] ?? "box";
+    if (NON_LLM_SHAPES.has(shape)) continue;
+    // Get class
+    const nodeClass = /class\s*=\s*["]?([^"',\]\s]+)["]?/.exec(attrs)?.[1] ?? null;
+    const rule = resolve(nodeId, nodeClass);
+    if (!rule.model && !rule.provider) continue;
+    const key = `${rule.provider ?? ""}/${rule.model ?? ""}`;
+    if (!keyToColorIdx.has(key)) keyToColorIdx.set(key, nextIdx++ % MODEL_PALETTE.length);
+    nodeMap.set(nodeId, {
+      model:    rule.model    ?? "",
+      provider: rule.provider ?? "",
+      colorIdx: keyToColorIdx.get(key)!,
+    });
+  }
+
+  const legend: ModelLegendEntry[] = Array.from(keyToColorIdx.entries()).map(([key, colorIdx]) => {
+    const slash = key.indexOf("/");
+    return { key, provider: key.slice(0, slash), model: key.slice(slash + 1), colorIdx };
+  });
+
+  return { nodeMap, legend };
+}
+
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 5;
 const ZOOM_STEP = 0.15;
@@ -102,6 +209,12 @@ export function DotPreview({
   const [svgVersion, setSvgVersion] = useState(0);
   const [scale, setScale] = useState(1);
   const [translate, setTranslate] = useState({ x: 0, y: 0 });
+  // Model data derived from DOT stylesheet (memoized — cheap to compute, avoids effect churn)
+  const { nodeMap: nodeModelMap, legend: modelLegend } = useMemo(
+    () => buildNodeModelData(dot ?? ""),
+    [dot]
+  );
+
   const dragRef = useRef<{ startX: number; startY: number; startTx: number; startTy: number } | null>(null);
   const pointerDownPos = useRef<{ x: number; y: number } | null>(null);
   const wasDragging = useRef(false);
@@ -525,6 +638,64 @@ export function DotPreview({
     });
   }, [stageHistory, svgVersion]);
 
+  // Add model/provider badge to each LLM node, positioned left of the git-op badge.
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg || !dot) return;
+
+    svg.querySelectorAll(".model-badge").forEach((el) => el.remove());
+    if (nodeModelMap.size === 0) return;
+
+    const ns = "http://www.w3.org/2000/svg";
+    const graphGroup = svg.querySelector("g#graph0") || svg.querySelector("g");
+    if (!graphGroup) return;
+
+    svg.querySelectorAll("g.node").forEach((nodeG) => {
+      const title = nodeG.querySelector("title")?.textContent?.trim() || "";
+      const info = nodeModelMap.get(title);
+      if (!info) return;
+
+      const palette = MODEL_PALETTE[info.colorIdx % MODEL_PALETTE.length];
+      const bbox = (nodeG as SVGGraphicsElement).getBBox();
+      // Sit 24px left of topRight corner (left of git-op badge at -8)
+      const cx = bbox.x + bbox.width - 24;
+      const cy = bbox.y;
+
+      // Provider initial for the badge label
+      const label = (info.provider || info.model).charAt(0).toUpperCase();
+
+      const group = document.createElementNS(ns, "g");
+      group.setAttribute("class", "model-badge");
+
+      const circle = document.createElementNS(ns, "circle");
+      circle.setAttribute("cx", String(cx));
+      circle.setAttribute("cy", String(cy));
+      circle.setAttribute("r", "8");
+      circle.setAttribute("fill", palette.bg);
+      circle.setAttribute("stroke", palette.stroke);
+      circle.setAttribute("stroke-width", "1.5");
+      group.appendChild(circle);
+
+      const text = document.createElementNS(ns, "text");
+      text.setAttribute("x", String(cx));
+      text.setAttribute("y", String(cy));
+      text.setAttribute("text-anchor", "middle");
+      text.setAttribute("dominant-baseline", "central");
+      text.setAttribute("font-family", "ui-sans-serif, system-ui, sans-serif");
+      text.setAttribute("font-size", "8");
+      text.setAttribute("font-weight", "700");
+      text.setAttribute("fill", palette.text);
+      text.textContent = label;
+      group.appendChild(text);
+
+      const titleEl = document.createElementNS(ns, "title");
+      titleEl.textContent = `${info.provider} / ${info.model}`;
+      group.appendChild(titleEl);
+
+      graphGroup.appendChild(group);
+    });
+  }, [dot, svgVersion, nodeModelMap]);
+
   // Add git op icon badges (⑂ branch/worktree, ⊕ merge) to identified nodes.
   // Placed at topRightX - 16 so they sit just left of the visit count circles.
   useEffect(() => {
@@ -919,6 +1090,28 @@ export function DotPreview({
           disableInteraction ? "touch-auto" : "cursor-grab active:cursor-grabbing touch-none"
         }`}
       />
+      {/* Model legend — shown whenever there are distinct model/provider combos */}
+      {modelLegend.length > 0 && (
+        <div className="absolute top-2 left-2 flex flex-col gap-1 bg-gray-900/85 rounded px-2 py-1.5 border border-gray-700 pointer-events-none">
+          {modelLegend.map(({ key, provider, model, colorIdx }) => {
+            const p = MODEL_PALETTE[colorIdx % MODEL_PALETTE.length];
+            const shortModel = model.replace(/-preview$/, "").replace(/-\d{8}$/, "");
+            return (
+              <div key={key} className="flex items-center gap-1.5">
+                <span
+                  className="w-3 h-3 rounded-full shrink-0 border"
+                  style={{ background: p.bg, borderColor: p.stroke }}
+                />
+                <span className="text-[10px] leading-none" style={{ color: p.text }}>
+                  {provider && <span className="opacity-70">{provider} · </span>}
+                  {shortModel}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {!disableInteraction && (
         <div className="absolute bottom-2 right-2 flex items-center gap-1 text-xs text-gray-400 bg-gray-900/80 rounded px-2 py-1 border border-gray-700">
           <button onClick={zoomOut} className="px-1 hover:text-gray-200">&minus;</button>

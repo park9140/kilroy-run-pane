@@ -9,6 +9,7 @@ interface Props {
   completedNodes?: string[];
   failedNodes?: string[];
   cycleNodes?: string[];
+  cycleResolved?: boolean;
   onNodeClick?: (nodeName: string) => void;
   selectedNode?: string;
   nodeAnnotations?: Record<string, string>;
@@ -186,8 +187,13 @@ const GLOW_FILTERS = `
   <filter id="glow-active" x="-50%" y="-50%" width="200%" height="200%">
     <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="#f59e0b" flood-opacity="1"/>
   </filter>
-  <filter id="glow-cycle" x="-50%" y="-50%" width="200%" height="200%">
-    <feDropShadow dx="0" dy="0" stdDeviation="5" flood-color="#f97316" flood-opacity="0.9"/>
+  <filter id="glow-cycle" x="-60%" y="-60%" width="220%" height="220%">
+    <feDropShadow dx="0" dy="0" stdDeviation="7" flood-color="#f97316" flood-opacity="1"/>
+    <feDropShadow dx="0" dy="0" stdDeviation="3" flood-color="#f97316" flood-opacity="1"/>
+  </filter>
+  <filter id="glow-cycle-live" x="-60%" y="-60%" width="220%" height="220%">
+    <feDropShadow dx="0" dy="0" stdDeviation="7" flood-color="#eab308" flood-opacity="1"/>
+    <feDropShadow dx="0" dy="0" stdDeviation="3" flood-color="#eab308" flood-opacity="1"/>
   </filter>
 `;
 
@@ -198,6 +204,7 @@ export function DotPreview({
   completedNodes,
   failedNodes,
   cycleNodes,
+  cycleResolved,
   onNodeClick,
   selectedNode,
   nodeAnnotations,
@@ -420,8 +427,9 @@ export function DotPreview({
         } else if (isActive) {
           shape.setAttribute("filter", "url(#glow-active)");
         } else if (isCycle) {
-          // Orange glow only — does not override the node's existing status color
-          shape.setAttribute("filter", "url(#glow-cycle)");
+          // Glow only — does not override the node's existing status color.
+          // Yellow while still executing; orange once the cycle has caused failure.
+          shape.setAttribute("filter", cycleResolved ? "url(#glow-cycle)" : "url(#glow-cycle-live)");
         }
       });
 
@@ -435,7 +443,7 @@ export function DotPreview({
         // Cycle nodes: no text color change — the glow on the shape is enough
       });
     });
-  }, [highlightNode, completedNodes, failedNodes, cycleNodes, dot, selectedNode, svgVersion]);
+  }, [highlightNode, completedNodes, failedNodes, cycleNodes, cycleResolved, dot, selectedNode, svgVersion]);
 
   // Highlight traversed edges and add traversal count badges.
   // When hoveredHistoryIndex is set, only highlights edges up to that point;
@@ -510,7 +518,8 @@ export function DotPreview({
 
     if (previewTraversals.size === 0 && futureTraversals.size === 0) return;
 
-    const CYCLE_EDGE_COLOR = "#f97316";  // orange-500 — cycle loop edges
+    // Yellow while still executing; orange once the cycle caused failure
+    const CYCLE_EDGE_COLOR = cycleResolved ? "#f97316" : "#eab308";
     const FUTURE_EDGE_COLOR = "#4b5563"; // dim gray for future edges
     const cycleSet = new Set(cycleNodes || []);
     const ns = "http://www.w3.org/2000/svg";
@@ -584,7 +593,7 @@ export function DotPreview({
         graphGroup.appendChild(group);
       }
     });
-  }, [stageHistory, hoveredHistoryIndex, cycleNodes, svgVersion]);
+  }, [stageHistory, hoveredHistoryIndex, cycleNodes, cycleResolved, svgVersion]);
 
   // Add per-node visit count badges (shown when a node is visited more than once).
   useEffect(() => {

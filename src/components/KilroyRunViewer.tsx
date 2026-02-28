@@ -73,11 +73,11 @@ export function KilroyRunViewer() {
   const highlightNode = [...nodeLastVisit.entries()].find(([, v]) => v.status === "running")?.[0];
 
   // Cycle node detection: nodes that form the repeated loop.
-  // Only highlight once the run has actually terminated in failure — not while still executing.
+  // Always shown once a cycle is detected (yellow while live, orange after failure).
   const cycleInfo = runState?.cycleInfo;
   const runFailed = computedStatus === "failed" || computedStatus === "stalled" || computedStatus === "interrupted";
   const cycleNodes = (() => {
-    if (!cycleInfo || !runFailed) return undefined;
+    if (!cycleInfo) return undefined;
     const mainHistory = stageHistory.filter((v) => !v.fan_out_node);
 
     // If we know the retry_target, identify the exact loop by finding the first
@@ -189,13 +189,21 @@ export function KilroyRunViewer() {
           )}
         </div>
       </div>
-      {/* Cycle failure banner — only shown after the run has terminated */}
-      {cycleInfo && runFailed && (
-        <div className="flex items-center gap-2 px-4 py-1.5 border-b border-orange-800/40 bg-orange-950/40 shrink-0">
-          <span className="text-xs font-semibold text-orange-400">⟳ Deterministic cycle</span>
-          <span className="text-orange-700">·</span>
-          <span className="text-xs font-mono text-orange-500/90 truncate" title={cycleInfo.signature}>{cycleInfo.signature}</span>
-          <span className="ml-auto text-xs text-orange-600 shrink-0">
+      {/* Cycle banner — yellow while live, orange after failure */}
+      {cycleInfo && (
+        <div className={`flex items-center gap-2 px-4 py-1.5 border-b shrink-0 ${
+          runFailed
+            ? "border-orange-800/40 bg-orange-950/40"
+            : "border-yellow-800/40 bg-yellow-950/30"
+        }`}>
+          <span className={`text-xs font-semibold ${runFailed ? "text-orange-400" : "text-yellow-400"}`}>
+            ⟳ Deterministic cycle
+          </span>
+          <span className={runFailed ? "text-orange-700" : "text-yellow-700"}>·</span>
+          <span className={`text-xs font-mono truncate ${runFailed ? "text-orange-500/90" : "text-yellow-500/90"}`} title={cycleInfo.signature}>
+            {cycleInfo.signature}
+          </span>
+          <span className={`ml-auto text-xs shrink-0 ${runFailed ? "text-orange-600" : "text-yellow-600"}`}>
             repeated {cycleInfo.signatureCount}/{cycleInfo.signatureLimit}×
           </span>
         </div>
@@ -225,6 +233,7 @@ export function KilroyRunViewer() {
               completedNodes={completedNodes}
               failedNodes={failedNodes}
               cycleNodes={cycleNodes}
+              cycleResolved={runFailed}
               highlightNode={highlightNode}
               selectedNode={graphSelectedNode}
               onNodeClick={handleGraphNodeClick}

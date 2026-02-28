@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { Components } from "react-markdown";
 
 interface WorkspaceFile {
   path: string;
@@ -21,10 +22,10 @@ interface WorkspacePanelProps {
 }
 
 function fileIcon(name: string): string {
-  if (name.endsWith(".md")) return "📄";
+  if (name.endsWith(".md")) return "M↓";
   if (name.endsWith(".json")) return "{}";
   if (name.endsWith(".sh")) return "⚙";
-  if (name.endsWith(".ts") || name.endsWith(".tsx") || name.endsWith(".js")) return "⌥";
+  if (name.endsWith(".ts") || name.endsWith(".tsx") || name.endsWith(".js")) return "JS";
   return "·";
 }
 
@@ -39,6 +40,83 @@ function formatAge(mtime: number): string {
   if (s < 3600) return `${Math.floor(s / 60)}m`;
   return `${Math.floor(s / 3600)}h`;
 }
+
+// Markdown components with good code block formatting
+const markdownComponents: Components = {
+  code({ className, children, ...props }) {
+    const isBlock = className?.startsWith("language-");
+    const lang = className?.replace("language-", "") ?? "";
+    if (isBlock) {
+      return (
+        <div className="my-2 rounded border border-gray-700 overflow-hidden">
+          {lang && (
+            <div className="px-2 py-0.5 bg-gray-800 text-[9px] text-gray-500 font-mono border-b border-gray-700">
+              {lang}
+            </div>
+          )}
+          <pre className="overflow-x-auto p-3 bg-gray-900">
+            <code className="text-[11px] font-mono text-gray-200 whitespace-pre">{children}</code>
+          </pre>
+        </div>
+      );
+    }
+    return (
+      <code
+        className="text-[10px] font-mono bg-gray-800 text-amber-300 px-1 py-0.5 rounded"
+        {...props}
+      >
+        {children}
+      </code>
+    );
+  },
+  pre({ children }) {
+    // Let our code component handle pre+code; bare pre blocks get plain styling
+    return <>{children}</>;
+  },
+  h1({ children }) {
+    return <h1 className="text-sm font-semibold text-gray-100 mt-3 mb-1.5 border-b border-gray-800 pb-1">{children}</h1>;
+  },
+  h2({ children }) {
+    return <h2 className="text-xs font-semibold text-gray-200 mt-2.5 mb-1">{children}</h2>;
+  },
+  h3({ children }) {
+    return <h3 className="text-xs font-medium text-gray-300 mt-2 mb-0.5">{children}</h3>;
+  },
+  p({ children }) {
+    return <p className="text-[11px] text-gray-300 my-1 leading-relaxed">{children}</p>;
+  },
+  ul({ children }) {
+    return <ul className="list-disc list-inside text-[11px] text-gray-300 my-1 space-y-0.5 pl-2">{children}</ul>;
+  },
+  ol({ children }) {
+    return <ol className="list-decimal list-inside text-[11px] text-gray-300 my-1 space-y-0.5 pl-2">{children}</ol>;
+  },
+  li({ children }) {
+    return <li className="text-[11px] text-gray-300">{children}</li>;
+  },
+  blockquote({ children }) {
+    return <blockquote className="border-l-2 border-gray-600 pl-3 my-1 text-gray-400 italic">{children}</blockquote>;
+  },
+  a({ href, children }) {
+    return <a href={href} className="text-blue-400 hover:underline" target="_blank" rel="noreferrer">{children}</a>;
+  },
+  table({ children }) {
+    return (
+      <div className="overflow-x-auto my-2">
+        <table className="text-[10px] text-gray-300 border-collapse border border-gray-700 w-full">{children}</table>
+      </div>
+    );
+  },
+  th({ children }) {
+    return <th className="border border-gray-700 px-2 py-1 bg-gray-800 text-left font-semibold text-gray-200">{children}</th>;
+  },
+  td({ children }) {
+    return <td className="border border-gray-700 px-2 py-1">{children}</td>;
+  },
+  hr() {
+    return <hr className="border-gray-700 my-2" />;
+  },
+};
 
 function JsonViewer({ content }: { content: string }) {
   try {
@@ -59,8 +137,10 @@ function JsonViewer({ content }: { content: string }) {
 
 function MarkdownViewer({ content }: { content: string }) {
   return (
-    <div className="prose prose-invert prose-sm max-w-none text-gray-300 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-medium [&_h1]:text-gray-200 [&_h2]:text-gray-200 [&_h3]:text-gray-300 [&_code]:text-[10px] [&_pre]:bg-gray-900 [&_pre]:border [&_pre]:border-gray-700 [&_p]:text-[11px] [&_li]:text-[11px] [&_a]:text-blue-400">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+    <div className="text-gray-300">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+        {content}
+      </ReactMarkdown>
     </div>
   );
 }
@@ -73,9 +153,36 @@ function PlainViewer({ content }: { content: string }) {
   );
 }
 
+type ViewMode = "rendered" | "raw";
+
 function FileContentViewer({ content, fileName }: { content: string; fileName: string }) {
-  if (fileName.endsWith(".md")) return <MarkdownViewer content={content} />;
-  if (fileName.endsWith(".json")) return <JsonViewer content={content} />;
+  const isMarkdown = fileName.endsWith(".md");
+  const isJson = fileName.endsWith(".json");
+  const [mode, setMode] = useState<ViewMode>("rendered");
+
+  if (isMarkdown) {
+    return (
+      <div>
+        <div className="flex items-center gap-1 mb-2">
+          <button
+            onClick={() => setMode("rendered")}
+            className={`text-[9px] px-1.5 py-0.5 rounded ${mode === "rendered" ? "bg-gray-700 text-gray-200" : "text-gray-600 hover:text-gray-400"}`}
+          >
+            Rendered
+          </button>
+          <button
+            onClick={() => setMode("raw")}
+            className={`text-[9px] px-1.5 py-0.5 rounded ${mode === "raw" ? "bg-gray-700 text-gray-200" : "text-gray-600 hover:text-gray-400"}`}
+          >
+            Raw
+          </button>
+        </div>
+        {mode === "rendered" ? <MarkdownViewer content={content} /> : <PlainViewer content={content} />}
+      </div>
+    );
+  }
+
+  if (isJson) return <JsonViewer content={content} />;
   return <PlainViewer content={content} />;
 }
 
@@ -85,6 +192,7 @@ export function WorkspacePanel({ runId, isExecuting, onClose }: WorkspacePanelPr
   const [fileContent, setFileContent] = useState<string | null>(null);
   const [loadingContent, setLoadingContent] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
 
   const fetchFiles = useCallback(async () => {
     try {
@@ -97,11 +205,10 @@ export function WorkspacePanel({ runId, isExecuting, onClose }: WorkspacePanelPr
       const d = await res.json() as WorkspaceData;
       setData(d);
       setError(null);
-      // Auto-select work_queue.json or spec.md if nothing selected yet
+      // Auto-select work_queue.json or spec.md on first load
       if (!selectedPath && d.files.length > 0) {
         const preferred = d.files.find((f) => f.name === "work_queue.json" || f.name === "spec.md");
-        const toSelect = preferred ?? d.files[0];
-        setSelectedPath(toSelect.path);
+        setSelectedPath((preferred ?? d.files[0]).path);
       }
     } catch (e) {
       setError(String(e));
@@ -141,6 +248,25 @@ export function WorkspacePanel({ runId, isExecuting, onClose }: WorkspacePanelPr
     return () => clearInterval(id);
   }, [runId, selectedPath, isExecuting]);
 
+  const handleDownload = async () => {
+    setDownloading(true);
+    try {
+      const res = await fetch(`/api/runs/${runId}/workspace/download`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `workspace-${runId.slice(-8)}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error("Download failed:", e);
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   const selectedFile = data?.files.find((f) => f.path === selectedPath);
 
   return (
@@ -153,17 +279,25 @@ export function WorkspacePanel({ runId, isExecuting, onClose }: WorkspacePanelPr
             <span className="text-[9px] text-amber-400 animate-pulse">● live</span>
           )}
         </div>
-        <button
-          onClick={onClose}
-          className="text-gray-500 hover:text-gray-200 text-xs px-2 py-1 rounded hover:bg-gray-800 shrink-0"
-        >✕</button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            onClick={handleDownload}
+            disabled={!data || downloading}
+            title="Download workspace files as zip"
+            className="text-[10px] px-2 py-0.5 rounded border border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {downloading ? "…" : "⬇ zip"}
+          </button>
+          <button
+            onClick={onClose}
+            className="text-gray-500 hover:text-gray-200 text-xs px-2 py-1 rounded hover:bg-gray-800"
+          >✕</button>
+        </div>
       </div>
 
       {error ? (
         <div className="flex-1 flex items-center justify-center">
-          <div className="text-center space-y-1">
-            <div className="text-xs text-gray-500">{error}</div>
-          </div>
+          <div className="text-xs text-gray-500">{error}</div>
         </div>
       ) : !data ? (
         <div className="flex-1 flex items-center justify-center">
@@ -183,23 +317,17 @@ export function WorkspacePanel({ runId, isExecuting, onClose }: WorkspacePanelPr
                     key={f.path}
                     onClick={() => setSelectedPath(f.path)}
                     className={`w-full text-left flex items-center gap-2 px-3 py-1.5 hover:bg-gray-800/60 transition-colors border-l-2 ${
-                      isSelected
-                        ? "bg-gray-700/50 border-blue-500"
-                        : "border-transparent"
+                      isSelected ? "bg-gray-700/50 border-blue-500" : "border-transparent"
                     }`}
                   >
-                    <span className="text-[10px] text-gray-500 font-mono w-4 shrink-0 text-center">
+                    <span className="text-[9px] text-gray-600 font-mono w-5 shrink-0 text-center">
                       {fileIcon(f.name)}
                     </span>
                     <span className={`text-xs font-mono truncate flex-1 ${isSelected ? "text-gray-100" : "text-gray-300"}`}>
                       {f.path}
                     </span>
-                    <span className="text-[9px] text-gray-600 shrink-0 tabular-nums">
-                      {fmtSize(f.size)}
-                    </span>
-                    <span className="text-[9px] text-gray-700 shrink-0 tabular-nums">
-                      {formatAge(f.mtime)}
-                    </span>
+                    <span className="text-[9px] text-gray-600 shrink-0 tabular-nums">{fmtSize(f.size)}</span>
+                    <span className="text-[9px] text-gray-700 shrink-0 tabular-nums">{formatAge(f.mtime)}</span>
                   </button>
                 );
               })
@@ -214,7 +342,7 @@ export function WorkspacePanel({ runId, isExecuting, onClose }: WorkspacePanelPr
               <div className="text-xs text-gray-600">Loading…</div>
             ) : fileContent !== null ? (
               <div>
-                <div className="flex items-center gap-2 mb-2 pb-1.5 border-b border-gray-800/50 shrink-0">
+                <div className="flex items-center gap-2 mb-2 pb-1.5 border-b border-gray-800/50">
                   <span className="text-[10px] font-mono text-gray-400 flex-1 truncate">{selectedFile?.path}</span>
                   {selectedFile && (
                     <span className="text-[9px] text-gray-600 shrink-0 tabular-nums">

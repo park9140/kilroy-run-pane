@@ -1,5 +1,6 @@
 import { readdir, stat, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import archiver from "archiver";
 import type { Express, Request, Response } from "express";
 import type { RunWatcher } from "./runWatcher.js";
 
@@ -306,6 +307,29 @@ export function registerRoutes(
     } catch {
       res.status(404).json({ error: "file not found" });
     }
+  });
+
+  // Workspace: download all .ai/ files as a zip
+  app.get("/api/runs/:id/workspace/download", async (req: Request, res: Response) => {
+    const id = String(req.params["id"] ?? "");
+    const state = watcher.getState(id) ?? await watcher.watch(id);
+    const worktreePath = state?.worktreePath;
+    if (!worktreePath) { res.status(404).json({ error: "no worktree" }); return; }
+
+    const aiDir = join(worktreePath, ".ai");
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="workspace-${id.slice(-8)}.zip"`);
+
+    const archive = archiver("zip", { zlib: { level: 6 } });
+    archive.on("error", (err) => { res.destroy(err); });
+    archive.pipe(res);
+    archive.directory(aiDir, ".ai");
+    // Also include status.json at root if it exists
+    try {
+      await stat(join(worktreePath, "status.json"));
+      archive.file(join(worktreePath, "status.json"), { name: "status.json" });
+    } catch { /* not present */ }
+    await archive.finalize();
   });
 
   // Serve SPA for /run/* routes (must come after API routes)

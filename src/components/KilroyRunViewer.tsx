@@ -202,6 +202,7 @@ export function KilroyRunViewer() {
               selectedHistoryIndex={selectedHistoryIndex}
               onSelectVisit={(idx) => { userClosedRef.current = false; setSelectedHistoryIndex(idx); setPendingNodeId(null); }}
               onClose={() => { userClosedRef.current = true; setSelectedHistoryIndex(null); setPendingNodeId(null); }}
+              dot={dot}
             />
           )}
           {pendingNodeId && selectedHistoryIndex == null && (

@@ -39,6 +39,8 @@ export function KilroyRunViewer() {
 
   const [selectedHistoryIndex, setSelectedHistoryIndex] = useState<number | null>(null);
   const [hoveredHistoryIndex, setHoveredHistoryIndex] = useState<number | null>(null);
+  // Node clicked but not yet in execution history (pending / not yet reached)
+  const [pendingNodeId, setPendingNodeId] = useState<string | null>(null);
   // True once the user has explicitly closed the detail panel — prevents re-auto-opening on SSE updates.
   const userClosedRef = useRef(false);
 
@@ -57,7 +59,7 @@ export function KilroyRunViewer() {
     // Find the last failed entry in history
     let lastFailIndex = -1;
     stageHistory.forEach((v, i) => { if (v.status === "fail") lastFailIndex = i; });
-    if (lastFailIndex >= 0) setSelectedHistoryIndex(lastFailIndex);
+    if (lastFailIndex >= 0) { setPendingNodeId(null); setSelectedHistoryIndex(lastFailIndex); }
   }, [stageHistory, computedStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Derive graph node colorings from stageHistory (most recent status per node)
@@ -70,17 +72,31 @@ export function KilroyRunViewer() {
   // The selected node on the graph = the node_id of the selected history item
   const selectedNodeId = selectedHistoryIndex != null ? stageHistory[selectedHistoryIndex]?.node_id : undefined;
 
-  // Clicking a graph node selects the most recent visit to that node
+  // Clicking a graph node selects the most recent visit to that node,
+  // or shows a pending panel if the node hasn't been reached yet.
   const handleGraphNodeClick = (nodeName: string) => {
-    if (selectedNodeId === nodeName) {
+    // Toggle off if clicking the already-selected node
+    if (selectedHistoryIndex != null && selectedNodeId === nodeName) {
       userClosedRef.current = true;
       setSelectedHistoryIndex(null);
+      setPendingNodeId(null);
+      return;
+    }
+    if (pendingNodeId === nodeName) {
+      userClosedRef.current = true;
+      setPendingNodeId(null);
       return;
     }
     userClosedRef.current = false;
     let lastIndex = -1;
     stageHistory.forEach((v, i) => { if (v.node_id === nodeName) lastIndex = i; });
-    setSelectedHistoryIndex(lastIndex >= 0 ? lastIndex : null);
+    if (lastIndex >= 0) {
+      setSelectedHistoryIndex(lastIndex);
+      setPendingNodeId(null);
+    } else {
+      setSelectedHistoryIndex(null);
+      setPendingNodeId(nodeName);
+    }
   };
 
   if (loading) {
@@ -102,7 +118,9 @@ export function KilroyRunViewer() {
     );
   }
 
-  const panelOpen = selectedHistoryIndex != null;
+  const panelOpen = selectedHistoryIndex != null || pendingNodeId != null;
+  // The node highlighted/selected on the graph — either from history or the pending click
+  const graphSelectedNode = selectedNodeId ?? pendingNodeId ?? undefined;
 
   return (
     <div className="flex flex-col h-screen bg-gray-950 text-gray-100">
@@ -135,7 +153,7 @@ export function KilroyRunViewer() {
             stages={stages}
             stageHistory={stageHistory}
             selectedHistoryIndex={selectedHistoryIndex}
-            onSelectVisit={setSelectedHistoryIndex}
+            onSelectVisit={(idx) => { setPendingNodeId(null); setSelectedHistoryIndex(idx); }}
             onHoverVisit={setHoveredHistoryIndex}
           />
         )}
@@ -149,7 +167,7 @@ export function KilroyRunViewer() {
               completedNodes={completedNodes}
               failedNodes={failedNodes}
               highlightNode={highlightNode}
-              selectedNode={selectedNodeId}
+              selectedNode={graphSelectedNode}
               onNodeClick={handleGraphNodeClick}
               stageHistory={stageHistory}
               hoveredHistoryIndex={hoveredHistoryIndex}
@@ -177,14 +195,31 @@ export function KilroyRunViewer() {
             panelOpen ? "translate-x-0" : "translate-x-full w-0"
           }`}
         >
-          {run && panelOpen && selectedHistoryIndex != null && (
+          {run && selectedHistoryIndex != null && (
             <StageDetailPanel
               run={run}
               stageHistory={stageHistory}
               selectedHistoryIndex={selectedHistoryIndex}
-              onSelectVisit={(idx) => { userClosedRef.current = false; setSelectedHistoryIndex(idx); }}
-              onClose={() => { userClosedRef.current = true; setSelectedHistoryIndex(null); }}
+              onSelectVisit={(idx) => { userClosedRef.current = false; setSelectedHistoryIndex(idx); setPendingNodeId(null); }}
+              onClose={() => { userClosedRef.current = true; setSelectedHistoryIndex(null); setPendingNodeId(null); }}
             />
+          )}
+          {pendingNodeId && selectedHistoryIndex == null && (
+            <div className="w-96 h-full border-l border-gray-800 flex flex-col shrink-0 bg-gray-900/30">
+              <div className="border-b border-gray-800 px-3 py-2 shrink-0 flex items-center justify-between gap-2">
+                <span className="text-xs font-mono text-gray-200 truncate font-medium">{pendingNodeId}</span>
+                <button
+                  onClick={() => { userClosedRef.current = true; setPendingNodeId(null); }}
+                  className="text-gray-500 hover:text-gray-200 text-xs px-2 py-1 rounded hover:bg-gray-800 shrink-0"
+                >✕</button>
+              </div>
+              <div className="flex-1 flex items-center justify-center">
+                <div className="text-center space-y-1">
+                  <div className="text-xs text-gray-500">Not yet executed</div>
+                  <div className="text-[10px] text-gray-700">This node hasn't run in this execution</div>
+                </div>
+              </div>
+            </div>
           )}
         </div>
       </div>

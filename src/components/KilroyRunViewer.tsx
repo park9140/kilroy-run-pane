@@ -4,6 +4,7 @@ import { useRunMonitor } from "../hooks/useRunMonitor";
 import { DotPreview } from "./DotPreview";
 import { StageSidebar } from "./StageSidebar";
 import { StageDetailPanel } from "./StageDetailPanel";
+import { WorkspacePanel } from "./WorkspacePanel";
 import type { ComputedStatus } from "../lib/types";
 
 function StatusBadge({ status }: { status: ComputedStatus | undefined }) {
@@ -43,6 +44,8 @@ export function KilroyRunViewer() {
   const [pendingNodeId, setPendingNodeId] = useState<string | null>(null);
   // True once the user has explicitly closed the detail panel — prevents re-auto-opening on SSE updates.
   const userClosedRef = useRef(false);
+  // Workspace file browser toggle
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
 
   const run = runState?.run;
 
@@ -160,6 +163,19 @@ export function KilroyRunViewer() {
         {run?.dot_file && <span className="text-xs text-gray-500">{run.dot_file}</span>}
         {run?.last_heartbeat && <HeartbeatAge lastHeartbeat={run.last_heartbeat} />}
         <div className="ml-auto flex items-center gap-2">
+          {runState?.worktreePath && (
+            <button
+              onClick={() => setWorkspaceOpen((v) => !v)}
+              title="Browse workspace files"
+              className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
+                workspaceOpen
+                  ? "bg-blue-600/20 border-blue-500/50 text-blue-300"
+                  : "border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600"
+              }`}
+            >
+              workspace
+            </button>
+          )}
           <span
             className={`w-2 h-2 rounded-full ${connected ? "bg-green-500" : "bg-red-500"}`}
             title={connected ? "Connected" : "Disconnected"}
@@ -264,6 +280,15 @@ export function KilroyRunViewer() {
             </div>
           )}
         </div>
+
+        {/* Workspace panel (slide-in from right) */}
+        {workspaceOpen && runId && (
+          <WorkspacePanel
+            runId={runId}
+            isExecuting={runState?.computedStatus === "executing"}
+            onClose={() => setWorkspaceOpen(false)}
+          />
+        )}
       </div>
     </div>
   );

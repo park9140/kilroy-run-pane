@@ -244,6 +244,70 @@ export function registerRoutes(
     }
   });
 
+  // Workspace: list files in the worktree's .ai/ directory
+  app.get("/api/runs/:id/workspace", async (req: Request, res: Response) => {
+    const id = String(req.params["id"] ?? "");
+    const state = watcher.getState(id) ?? await watcher.watch(id);
+    const worktreePath = state?.worktreePath;
+    if (!worktreePath) { res.status(404).json({ error: "no worktree" }); return; }
+
+    // Recursively list files under worktree/.ai/ and also include status.json at root
+    const aiDir = join(worktreePath, ".ai");
+    type WorkspaceFile = { path: string; name: string; size: number; mtime: number };
+    const files: WorkspaceFile[] = [];
+
+    async function scanDir(dir: string, prefix: string) {
+      try {
+        const entries = await readdir(dir, { withFileTypes: true });
+        for (const e of entries) {
+          const rel = prefix ? `${prefix}/${e.name}` : e.name;
+          if (e.isDirectory()) {
+            await scanDir(join(dir, e.name), rel);
+          } else if (e.isFile()) {
+            try {
+              const s = await stat(join(dir, e.name));
+              files.push({ path: `.ai/${rel}`, name: e.name, size: s.size, mtime: s.mtimeMs });
+            } catch { /* skip */ }
+          }
+        }
+      } catch { /* dir missing */ }
+    }
+
+    await scanDir(aiDir, "");
+    // Also include status.json at worktree root if present
+    try {
+      const s = await stat(join(worktreePath, "status.json"));
+      files.unshift({ path: "status.json", name: "status.json", size: s.size, mtime: s.mtimeMs });
+    } catch { /* not present */ }
+
+    files.sort((a, b) => a.path.localeCompare(b.path));
+    res.json({ files, worktreePath });
+  });
+
+  // Workspace: serve a single file by relative path within the worktree
+  app.get("/api/runs/:id/workspace/file", async (req: Request, res: Response) => {
+    const id = String(req.params["id"] ?? "");
+    const relPath = String(req.query["path"] ?? "");
+    if (!relPath || relPath.includes("..")) { res.status(400).json({ error: "invalid path" }); return; }
+
+    const state = watcher.getState(id) ?? await watcher.watch(id);
+    const worktreePath = state?.worktreePath;
+    if (!worktreePath) { res.status(404).json({ error: "no worktree" }); return; }
+
+    const absPath = join(worktreePath, relPath);
+    // Ensure path stays within worktree
+    if (!absPath.startsWith(worktreePath + "/") && absPath !== worktreePath) {
+      res.status(400).json({ error: "path outside worktree" }); return;
+    }
+    try {
+      const content = await readFile(absPath, "utf8");
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.send(content);
+    } catch {
+      res.status(404).json({ error: "file not found" });
+    }
+  });
+
   // Serve SPA for /run/* routes (must come after API routes)
   app.get("/run/*", (_req: Request, res: Response) => {
     res.sendFile(join(distDir, "index.html"));

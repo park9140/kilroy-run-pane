@@ -77,6 +77,7 @@ export interface RunState {
   stageHistory?: VisitedStage[];
   cycleInfo?: CycleInfo;
   restartCount?: number; // number of loop_restart cycles completed
+  worktreePath?: string; // absolute path to the run's git worktree
   format: "kilroy-dash" | "attractor";
 }
 
@@ -162,6 +163,7 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
     const logsRoot = typeof manifest.logs_root === "string" ? manifest.logs_root : runDir;
     const repoPath = typeof manifest.repo_path === "string" ? manifest.repo_path : undefined;
     const graphDotPath = typeof manifest.graph_dot === "string" ? manifest.graph_dot : undefined;
+    const worktreePath = typeof manifest.worktree === "string" ? manifest.worktree : undefined;
     const repo = repoPath ? repoPath.split("/").pop() : undefined;
 
     // Read DOT content
@@ -304,6 +306,7 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
       stageHistory,
       cycleInfo: resolvedCycleInfo,
       restartCount: restartCount > 0 ? restartCount : undefined,
+      worktreePath,
       format: "attractor",
     };
   } catch (err) {

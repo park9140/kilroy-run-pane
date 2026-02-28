@@ -77,6 +77,7 @@ export interface RunState {
   stageHistory?: VisitedStage[];
   cycleInfo?: CycleInfo;
   restartCount?: number; // number of loop_restart cycles completed
+  restartKinds?: Record<number, "loop" | "process">; // kind per restartIndex (1-based)
   worktreePath?: string; // absolute path to the run's git worktree
   format: "kilroy-dash" | "attractor";
 }
@@ -127,29 +128,46 @@ async function readKilroyDashFormat(runDir: string): Promise<RunState | null> {
 
 /** Follow loop_restart events in progress.ndjson to build the ordered list of
  *  all log-root directories for this run: [runDir, restart-1, restart-2, ...].
+ *
+ *  Also determines for each transition whether it was a *true* process restart
+ *  (the old attractor was killed and a new one resumed) vs a *pipeline loop*
+ *  restart triggered by the DOT graph's own loop_restart edge.
+ *
+ *  Detection: a pipeline loop produces exactly ONE loop_restart event pointing
+ *  to the next dir. A true process restart causes the newly-resumed attractor
+ *  to append ANOTHER loop_restart event to the same parent progress.ndjson
+ *  (pointing to the same child dir it already created). So N > 1 events for
+ *  the same child dir means the transition involved at least one true restart.
  */
-async function walkRestartChain(rootDir: string): Promise<string[]> {
+async function walkRestartChain(rootDir: string): Promise<{ dirs: string[]; isTrueRestart: boolean[] }> {
   const dirs = [rootDir];
+  const isTrueRestart: boolean[] = []; // isTrueRestart[i] = true if dirs[i] was a true restart
   let current = rootDir;
   for (let i = 0; i < 50; i++) { // safety limit
     try {
       const raw = await readFile(join(current, "progress.ndjson"), "utf8");
+      // Count loop_restart events per target dir
+      const countByTarget = new Map<string, number>();
       let nextDir: string | null = null;
       for (const line of raw.split("\n")) {
         if (!line.trim()) continue;
         try {
           const ev = JSON.parse(line) as Record<string, unknown>;
           if (ev.event === "loop_restart" && typeof ev.new_logs_root === "string") {
-            nextDir = ev.new_logs_root;
+            const target = ev.new_logs_root;
+            countByTarget.set(target, (countByTarget.get(target) ?? 0) + 1);
+            nextDir = target; // last one wins (they all point to the same place)
           }
         } catch { /* skip */ }
       }
       if (!nextDir || nextDir === current) break;
+      // >1 events for the same target means a new process resumed and re-wrote the event
+      isTrueRestart.push((countByTarget.get(nextDir) ?? 1) > 1);
       dirs.push(nextDir);
       current = nextDir;
     } catch { break; }
   }
-  return dirs;
+  return { dirs, isTrueRestart };
 }
 
 async function readAttractorFormat(runId: string, runDir: string): Promise<RunState | null> {
@@ -173,7 +191,7 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
     }
 
     // Walk restart chain: [runDir, restart-1, restart-2, ...]
-    const allDirs = await walkRestartChain(runDir);
+    const { dirs: allDirs, isTrueRestart } = await walkRestartChain(runDir);
     const latestDir = allDirs[allDirs.length - 1];
     const restartCount = allDirs.length - 1;
 
@@ -256,6 +274,12 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
 
     // Merge stage histories across all dirs in order, tagging each with restartIndex
     const stageHistory: VisitedStage[] = [];
+    // isTrueRestart[i] corresponds to the transition into allDirs[i], so restartIndex i
+    // (allDirs[0] = root has no transition; first transition is isTrueRestart[0] → allDirs[1])
+    const restartKinds: Record<number, "loop" | "process"> = {};
+    for (let i = 1; i < allDirs.length; i++) {
+      restartKinds[i] = isTrueRestart[i - 1] ? "process" : "loop";
+    }
     let mergedCycleInfo: CycleInfo | undefined;
     for (let i = 0; i < allDirs.length; i++) {
       const { history, cycleInfo: ci } = await parseProgressHistory(join(allDirs[i], "progress.ndjson"));
@@ -306,6 +330,7 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
       stageHistory,
       cycleInfo: resolvedCycleInfo,
       restartCount: restartCount > 0 ? restartCount : undefined,
+      restartKinds: restartCount > 0 ? restartKinds : undefined,
       worktreePath,
       format: "attractor",
     };

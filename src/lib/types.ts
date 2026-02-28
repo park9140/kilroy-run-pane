@@ -76,6 +76,7 @@ export interface RunState {
   stageHistory?: VisitedStage[];
   cycleInfo?: CycleInfo;
   restartCount?: number;
+  restartKinds?: Record<number, "loop" | "process">;
   worktreePath?: string;
   format?: string;
 }

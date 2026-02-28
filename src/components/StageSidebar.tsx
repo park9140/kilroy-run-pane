@@ -39,9 +39,10 @@ interface StageSidebarProps {
   onSelectVisit: (historyIndex: number) => void;
   onHoverVisit: (historyIndex: number | null) => void;
   restartCount?: number;
+  restartKinds?: Record<number, "loop" | "process">;
 }
 
-export function StageSidebar({ run, stageHistory, selectedHistoryIndex, onSelectVisit, onHoverVisit, restartCount }: StageSidebarProps) {
+export function StageSidebar({ run, stageHistory, selectedHistoryIndex, onSelectVisit, onHoverVisit, restartCount, restartKinds }: StageSidebarProps) {
   const selectedNodeId = selectedHistoryIndex != null ? stageHistory?.[selectedHistoryIndex]?.node_id : undefined;
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -122,11 +123,22 @@ export function StageSidebar({ run, stageHistory, selectedHistoryIndex, onSelect
       <div className="flex-1 overflow-auto">
         <h3 className="text-xs font-medium text-gray-400 px-3 py-2 uppercase tracking-wider sticky top-0 bg-gray-950 flex items-center justify-between">
           <span>Execution History</span>
-          {restartCount != null && restartCount > 0 && (
-            <span className="text-[10px] font-normal text-orange-400/80 normal-case tracking-normal">
-              ↻ {restartCount} restart{restartCount !== 1 ? "s" : ""}
-            </span>
-          )}
+          {restartCount != null && restartCount > 0 && (() => {
+            const processCount = restartKinds
+              ? Object.values(restartKinds).filter((k) => k === "process").length
+              : 0;
+            const loopCount = restartCount - processCount;
+            return (
+              <span className="text-[10px] font-normal normal-case tracking-normal flex items-center gap-1">
+                {processCount > 0 && (
+                  <span className="text-blue-400/80">⟳ {processCount} restart{processCount !== 1 ? "s" : ""}</span>
+                )}
+                {loopCount > 0 && (
+                  <span className="text-gray-500">↻ {loopCount} loop{loopCount !== 1 ? "s" : ""}</span>
+                )}
+              </span>
+            );
+          })()}
         </h3>
         {renderItems.length === 0 ? (
           <div className="text-xs text-gray-500 p-3">No history yet</div>
@@ -134,12 +146,20 @@ export function StageSidebar({ run, stageHistory, selectedHistoryIndex, onSelect
           <div>
             {renderItems.map((item, renderIdx) => {
               if (item.kind === "restart") {
+                const kind = restartKinds?.[item.restartIndex] ?? "loop";
+                const isProcess = kind === "process";
                 return (
                   <div
                     key={`restart-sep-${item.restartIndex}-${renderIdx}`}
-                    className="flex items-center gap-2 px-3 py-1 border-y border-orange-800/30 bg-orange-950/20 mt-0.5"
+                    className={`flex items-center gap-2 px-3 py-1 border-y mt-0.5 ${
+                      isProcess
+                        ? "border-blue-800/40 bg-blue-950/30"
+                        : "border-gray-700/30 bg-gray-900/40"
+                    }`}
                   >
-                    <span className="text-[10px] text-orange-400/80 font-medium">↻ Restart {item.restartIndex}</span>
+                    <span className={`text-[10px] font-medium ${isProcess ? "text-blue-400/90" : "text-gray-500"}`}>
+                      {isProcess ? "⟳ Process restart" : "↻ Loop iteration"} {item.restartIndex}
+                    </span>
                   </div>
                 );
               }

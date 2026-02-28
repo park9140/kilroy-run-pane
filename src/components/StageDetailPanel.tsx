@@ -710,11 +710,12 @@ export function StageDetailPanel({
               const icon = v.status === "pass" ? "✓" : v.status === "fail" ? "✗" : "●";
               const iconCls = v.status === "pass" ? "text-green-400" : v.status === "fail" ? "text-red-400" : "text-amber-400";
               const dur = v.duration_s != null ? fmtDuration(v.duration_s) : "…";
+              const restartIdx = v.restartIndex ?? 0;
               return (
                 <button
                   key={index}
                   onClick={() => onSelectVisit(index)}
-                  title={`${fmtTime(v.started_at)}${v.finished_at ? ` → ${fmtTime(v.finished_at)}` : ""}`}
+                  title={`${fmtTime(v.started_at)}${v.finished_at ? ` → ${fmtTime(v.finished_at)}` : ""}${restartIdx > 0 ? ` · loop ${restartIdx}` : ""}`}
                   className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs border transition-colors ${
                     isSelected
                       ? "border-blue-500 bg-blue-500/10 text-gray-200"
@@ -723,6 +724,9 @@ export function StageDetailPanel({
                 >
                   <span className={iconCls}>{icon}</span>
                   <span>#{visitNum + 1}</span>
+                  {restartIdx > 0 && (
+                    <span className="text-gray-600">↻{restartIdx}</span>
+                  )}
                   <span className="text-gray-500">{dur}</span>
                 </button>
               );

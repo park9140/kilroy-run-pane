@@ -73,11 +73,13 @@ export function KilroyRunViewer() {
   const highlightNode = [...nodeLastVisit.entries()].find(([, v]) => v.status === "running")?.[0];
 
   // Cycle node detection: nodes that form the repeated loop.
-  // Always shown once a cycle is detected (yellow while live, orange after failure).
+  // Only highlight cycles once they reach n-1 occurrences before failure.
+  // Yellow at n-1 (warning), orange after the run fails.
   const cycleInfo = runState?.cycleInfo;
   const runFailed = computedStatus === "failed" || computedStatus === "stalled" || computedStatus === "interrupted";
+  const cycleVisible = cycleInfo != null && cycleInfo.signatureCount >= cycleInfo.signatureLimit - 1;
   const cycleNodes = (() => {
-    if (!cycleInfo) return undefined;
+    if (!cycleVisible || !cycleInfo) return undefined;
     const mainHistory = stageHistory.filter((v) => !v.fan_out_node);
 
     // If we know the retry_target, identify the exact loop by finding the first
@@ -189,8 +191,8 @@ export function KilroyRunViewer() {
           )}
         </div>
       </div>
-      {/* Cycle banner — yellow while live, orange after failure */}
-      {cycleInfo && (
+      {/* Cycle banner — yellow at n-1 warning, orange after failure */}
+      {cycleVisible && (
         <div className={`flex items-center gap-2 px-4 py-1.5 border-b shrink-0 ${
           runFailed
             ? "border-orange-800/40 bg-orange-950/40"

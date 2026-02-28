@@ -1,5 +1,5 @@
 import { readFile, readdir, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { EventEmitter } from "node:events";
 import chokidar, { type FSWatcher } from "chokidar";
 import { checkContainerAlive } from "./pidCheck.js";
@@ -283,7 +283,17 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
     let mergedCycleInfo: CycleInfo | undefined;
     for (let i = 0; i < allDirs.length; i++) {
       const { history, cycleInfo: ci } = await parseProgressHistory(join(allDirs[i], "progress.ndjson"));
-      stageHistory.push(...history.map((v) => ({ ...v, restartIndex: i })));
+      // Prefix stage_path with the restart subdir so file routes resolve correctly
+      const restartPrefix = i === 0 ? "" : `${relative(runDir, allDirs[i])}/`;
+      stageHistory.push(...history.map((v) => ({
+        ...v,
+        restartIndex: i,
+        ...(restartPrefix ? {
+          stage_path: v.stage_path
+            ? `${restartPrefix}${v.stage_path}`
+            : `${restartPrefix}${v.node_id}`,
+        } : {}),
+      })));
       if (ci) mergedCycleInfo = ci;
     }
     const cycleInfo = mergedCycleInfo;

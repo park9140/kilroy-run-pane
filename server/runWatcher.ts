@@ -55,6 +55,7 @@ export interface VisitedStage {
   fan_out_node?: string;
   branch_key?: string;
   stage_path?: string;
+  restartIndex?: number; // 0 = root run, 1 = restart-1, N = restart-N
 }
 
 export interface CycleInfo {
@@ -75,6 +76,7 @@ export interface RunState {
   stages?: StageInfo[];
   stageHistory?: VisitedStage[];
   cycleInfo?: CycleInfo;
+  restartCount?: number; // number of loop_restart cycles completed
   format: "kilroy-dash" | "attractor";
 }
 
@@ -122,6 +124,33 @@ async function readKilroyDashFormat(runDir: string): Promise<RunState | null> {
 
 // ─── Raw attractor format (manifest.json + checkpoint.json + final.json) ────
 
+/** Follow loop_restart events in progress.ndjson to build the ordered list of
+ *  all log-root directories for this run: [runDir, restart-1, restart-2, ...].
+ */
+async function walkRestartChain(rootDir: string): Promise<string[]> {
+  const dirs = [rootDir];
+  let current = rootDir;
+  for (let i = 0; i < 50; i++) { // safety limit
+    try {
+      const raw = await readFile(join(current, "progress.ndjson"), "utf8");
+      let nextDir: string | null = null;
+      for (const line of raw.split("\n")) {
+        if (!line.trim()) continue;
+        try {
+          const ev = JSON.parse(line) as Record<string, unknown>;
+          if (ev.event === "loop_restart" && typeof ev.new_logs_root === "string") {
+            nextDir = ev.new_logs_root;
+          }
+        } catch { /* skip */ }
+      }
+      if (!nextDir || nextDir === current) break;
+      dirs.push(nextDir);
+      current = nextDir;
+    } catch { break; }
+  }
+  return dirs;
+}
+
 async function readAttractorFormat(runId: string, runDir: string): Promise<RunState | null> {
   try {
     const manifestRaw = await readFile(join(runDir, "manifest.json"), "utf8");
@@ -141,39 +170,49 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
       try { dot = await readFile(graphDotPath, "utf8"); } catch { /* ignore */ }
     }
 
-    // Read checkpoint
+    // Walk restart chain: [runDir, restart-1, restart-2, ...]
+    const allDirs = await walkRestartChain(runDir);
+    const latestDir = allDirs[allDirs.length - 1];
+    const restartCount = allDirs.length - 1;
+
+    // Read checkpoint from latest dir first, fall back to root
     let currentNode: string | undefined;
     let completedNodes: string[] = [];
     let hasCheckpoint = false;
     let checkpointTs: string | undefined;
-    try {
-      const cpRaw = await readFile(join(runDir, "checkpoint.json"), "utf8");
-      const cp: Record<string, unknown> = JSON.parse(cpRaw);
-      currentNode = typeof cp.current_node === "string" ? cp.current_node : undefined;
-      completedNodes = Array.isArray(cp.completed_nodes) ? cp.completed_nodes.map(String) : [];
-      checkpointTs = typeof cp.timestamp === "string" ? cp.timestamp : undefined;
-      hasCheckpoint = true;
-    } catch { /* no checkpoint yet */ }
+    for (const dir of [latestDir, runDir]) {
+      try {
+        const cpRaw = await readFile(join(dir, "checkpoint.json"), "utf8");
+        const cp: Record<string, unknown> = JSON.parse(cpRaw);
+        currentNode = typeof cp.current_node === "string" ? cp.current_node : undefined;
+        completedNodes = Array.isArray(cp.completed_nodes) ? cp.completed_nodes.map(String) : [];
+        checkpointTs = typeof cp.timestamp === "string" ? cp.timestamp : undefined;
+        hasCheckpoint = true;
+        break;
+      } catch { /* try next */ }
+    }
 
-    // Read final.json (terminal state)
+    // Read final.json from latest dir first, fall back to root
     let finalStatus: "completed" | "failed" | undefined;
     let failureReason: string | undefined;
     let finishedAt: string | undefined;
-    try {
-      const finalRaw = await readFile(join(runDir, "final.json"), "utf8");
-      const final: Record<string, unknown> = JSON.parse(finalRaw);
-      const s = String(final.status ?? "");
-      if (s === "success") finalStatus = "completed";
-      else if (s === "fail") finalStatus = "failed";
-      failureReason = typeof final.failure_reason === "string" ? final.failure_reason : undefined;
-      finishedAt = typeof final.timestamp === "string" ? final.timestamp : undefined;
-    } catch { /* still running */ }
+    for (const dir of [latestDir, runDir]) {
+      try {
+        const finalRaw = await readFile(join(dir, "final.json"), "utf8");
+        const final: Record<string, unknown> = JSON.parse(finalRaw);
+        const s = String(final.status ?? "");
+        if (s === "success") finalStatus = "completed";
+        else if (s === "fail") finalStatus = "failed";
+        failureReason = typeof final.failure_reason === "string" ? final.failure_reason : undefined;
+        finishedAt = typeof final.timestamp === "string" ? final.timestamp : undefined;
+        break;
+      } catch { /* try next */ }
+    }
 
-    // Get last heartbeat from last line of progress.ndjson
+    // Get last heartbeat from latest dir's progress.ndjson
     let lastHeartbeat: string | undefined;
     try {
-      const progressPath = join(runDir, "progress.ndjson");
-      // Read last few KB to get last event efficiently
+      const progressPath = join(latestDir, "progress.ndjson");
       const { size } = await stat(progressPath);
       const tailSize = Math.min(size, 4096);
       const buf = Buffer.alloc(tailSize);
@@ -191,14 +230,16 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
       }
     } catch { /* no progress.ndjson */ }
 
-    // Check PID liveness for executing runs
+    // Check PID liveness — try latest dir first, then root
     let containerAlive = false;
     if (!finalStatus && hasCheckpoint) {
-      try {
-        const pidRaw = await readFile(join(runDir, "run.pid"), "utf8");
-        const pid = parseInt(pidRaw.trim(), 10);
-        if (!isNaN(pid)) containerAlive = await checkPidAlive(pid);
-      } catch { /* no pid file */ }
+      for (const dir of [latestDir, runDir]) {
+        try {
+          const pidRaw = await readFile(join(dir, "run.pid"), "utf8");
+          const pid = parseInt(pidRaw.trim(), 10);
+          if (!isNaN(pid)) { containerAlive = await checkPidAlive(pid); break; }
+        } catch { /* try next */ }
+      }
     }
 
     // Determine status
@@ -211,10 +252,23 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
       status = "pending";
     }
 
-    // Read stage statuses and execution history
-    const stages = await readAttractorStages(runDir, completedNodes);
-    const progressPath = join(runDir, "progress.ndjson");
-    const { history: stageHistory, cycleInfo } = await parseProgressHistory(progressPath);
+    // Merge stage histories across all dirs in order, tagging each with restartIndex
+    const stageHistory: VisitedStage[] = [];
+    let mergedCycleInfo: CycleInfo | undefined;
+    for (let i = 0; i < allDirs.length; i++) {
+      const { history, cycleInfo: ci } = await parseProgressHistory(join(allDirs[i], "progress.ndjson"));
+      stageHistory.push(...history.map((v) => ({ ...v, restartIndex: i })));
+      if (ci) mergedCycleInfo = ci;
+    }
+    const cycleInfo = mergedCycleInfo;
+
+    // Merge stages from all dirs; later dirs override earlier for same node_id
+    const stageMap = new Map<string, StageInfo>();
+    for (const dir of allDirs) {
+      const dirStages = await readAttractorStages(dir, completedNodes);
+      for (const s of dirStages) stageMap.set(s.node_id, s);
+    }
+    const stages = [...stageMap.values()];
 
     const run: RunRecord = {
       id: runId,
@@ -249,6 +303,7 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
       stages,
       stageHistory,
       cycleInfo: resolvedCycleInfo,
+      restartCount: restartCount > 0 ? restartCount : undefined,
       format: "attractor",
     };
   } catch (err) {

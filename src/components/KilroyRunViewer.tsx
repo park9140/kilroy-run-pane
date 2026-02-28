@@ -194,6 +194,7 @@ export function KilroyRunViewer() {
             selectedHistoryIndex={selectedHistoryIndex}
             onSelectVisit={(idx) => { setPendingNodeId(null); setSelectedHistoryIndex(idx); }}
             onHoverVisit={setHoveredHistoryIndex}
+            restartCount={runState?.restartCount}
           />
         )}
 

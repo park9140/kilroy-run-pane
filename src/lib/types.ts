@@ -53,6 +53,8 @@ export interface VisitedStage {
   branch_key?: string;
   // Relative path from runsDir for branch stages (e.g. "parallel/dod_fanout/01-dod_a/dod_a")
   stage_path?: string;
+  // 0 = root run, 1 = restart-1, N = restart-N
+  restartIndex?: number;
 }
 
 export interface CycleInfo {
@@ -73,6 +75,7 @@ export interface RunState {
   stages?: StageInfo[];
   stageHistory?: VisitedStage[];
   cycleInfo?: CycleInfo;
+  restartCount?: number;
   format?: string;
 }
 

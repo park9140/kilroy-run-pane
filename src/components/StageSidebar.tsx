@@ -38,9 +38,10 @@ interface StageSidebarProps {
   selectedHistoryIndex: number | null;
   onSelectVisit: (historyIndex: number) => void;
   onHoverVisit: (historyIndex: number | null) => void;
+  restartCount?: number;
 }
 
-export function StageSidebar({ run, stageHistory, selectedHistoryIndex, onSelectVisit, onHoverVisit }: StageSidebarProps) {
+export function StageSidebar({ run, stageHistory, selectedHistoryIndex, onSelectVisit, onHoverVisit, restartCount }: StageSidebarProps) {
   const selectedNodeId = selectedHistoryIndex != null ? stageHistory?.[selectedHistoryIndex]?.node_id : undefined;
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -49,14 +50,21 @@ export function StageSidebar({ run, stageHistory, selectedHistoryIndex, onSelect
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [stageHistory?.length]);
 
-  // Flatten to render items, grouping branch children under their fan-out parent
-  // Each item: { visit, index, isChild }
-  type RenderItem = { visit: VisitedStage; index: number; isChild: boolean };
+  // Flatten to render items, inserting restart separators when restartIndex changes
+  type RenderItem =
+    | { kind: "visit"; visit: VisitedStage; index: number; isChild: boolean }
+    | { kind: "restart"; restartIndex: number };
   const renderItems: RenderItem[] = [];
   if (stageHistory) {
+    let lastRestartIndex: number | undefined;
     for (let i = 0; i < stageHistory.length; i++) {
       const visit = stageHistory[i];
-      renderItems.push({ visit, index: i, isChild: visit.fan_out_node != null });
+      const ri = visit.restartIndex ?? 0;
+      if (ri > 0 && ri !== lastRestartIndex) {
+        renderItems.push({ kind: "restart", restartIndex: ri });
+      }
+      lastRestartIndex = ri;
+      renderItems.push({ kind: "visit", visit, index: i, isChild: visit.fan_out_node != null });
     }
   }
 
@@ -112,14 +120,31 @@ export function StageSidebar({ run, stageHistory, selectedHistoryIndex, onSelect
 
       {/* Execution History */}
       <div className="flex-1 overflow-auto">
-        <h3 className="text-xs font-medium text-gray-400 px-3 py-2 uppercase tracking-wider sticky top-0 bg-gray-950">
-          Execution History
+        <h3 className="text-xs font-medium text-gray-400 px-3 py-2 uppercase tracking-wider sticky top-0 bg-gray-950 flex items-center justify-between">
+          <span>Execution History</span>
+          {restartCount != null && restartCount > 0 && (
+            <span className="text-[10px] font-normal text-orange-400/80 normal-case tracking-normal">
+              ↻ {restartCount} restart{restartCount !== 1 ? "s" : ""}
+            </span>
+          )}
         </h3>
         {renderItems.length === 0 ? (
           <div className="text-xs text-gray-500 p-3">No history yet</div>
         ) : (
           <div>
-            {renderItems.map(({ visit, index, isChild }) => {
+            {renderItems.map((item, renderIdx) => {
+              if (item.kind === "restart") {
+                return (
+                  <div
+                    key={`restart-sep-${item.restartIndex}-${renderIdx}`}
+                    className="flex items-center gap-2 px-3 py-1 border-y border-orange-800/30 bg-orange-950/20 mt-0.5"
+                  >
+                    <span className="text-[10px] text-orange-400/80 font-medium">↻ Restart {item.restartIndex}</span>
+                  </div>
+                );
+              }
+
+              const { visit, index, isChild } = item;
               const isSelected = index === selectedHistoryIndex;
               const isNodeSelected = visit.node_id === selectedNodeId && !isSelected;
               const isRunning = visit.status === "running";

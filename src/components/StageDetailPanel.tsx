@@ -40,6 +40,33 @@ function StatusBadge({ status }: { status: string }) {
 
 // ── DOT attribute parsing ────────────────────────────────────────────────────
 
+interface DotEdge {
+  target: string;
+  condition?: string;
+  loop_restart?: string;
+}
+
+function parseOutgoingEdges(dot: string, nodeId: string): DotEdge[] {
+  if (!dot || !nodeId) return [];
+  const escaped = nodeId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const edgeRe = new RegExp(`\\b${escaped}\\s*->\\s*(\\w+)\\s*(?:\\[([^\\]]{0,2000})\\])?`, "g");
+  const edges: DotEdge[] = [];
+  let m;
+  while ((m = edgeRe.exec(dot)) !== null) {
+    const target = m[1];
+    const edge: DotEdge = { target };
+    if (m[2]) {
+      const attrRe = /(\w+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^\s,\]]+))/g;
+      let am;
+      while ((am = attrRe.exec(m[2])) !== null) {
+        (edge as Record<string, string>)[am[1]] = (am[2] ?? am[3] ?? "");
+      }
+    }
+    edges.push(edge);
+  }
+  return edges;
+}
+
 function parseNodeDotAttrs(dot: string, nodeId: string): Record<string, string> {
   if (!dot || !nodeId) return {};
   const escaped = nodeId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -446,50 +473,92 @@ function FanOutNodeContent({
 // ── Routing/decision node view ────────────────────────────────────────────────
 
 function RoutingNodeContent({
-  visit, stageFiles, dotAttrs,
+  visit, stageFiles, dotAttrs, dot, nodeId, nextNodeId,
 }: {
   visit: VisitedStage;
   stageFiles: StageFiles;
   dotAttrs: Record<string, string>;
+  dot?: string;
+  nodeId: string;
+  nextNodeId?: string;
 }) {
   const label = dotAttrs.label;
   const shape = dotAttrs.shape;
   const { notes } = stageFiles;
   const passed = visit.status === "pass";
 
-  // Describe what kind of routing node this is
+  const edges = useMemo(() => parseOutgoingEdges(dot ?? "", nodeId), [dot, nodeId]);
+
   const kindLabel =
     shape === "Mdiamond" ? "Pipeline start" :
     shape === "Msquare"  ? "Pipeline exit" :
-    label                ? null : // will show label below
-    "Routing gate";
+    null;
 
   return (
-    <div className="flex-1 p-4 space-y-4">
+    <div className="flex-1 p-4 space-y-4 overflow-auto">
       {/* What this node does */}
-      <div>
-        {kindLabel && (
-          <div className="text-[10px] text-gray-600 uppercase tracking-widest mb-1">{kindLabel}</div>
-        )}
-        {label && (
-          <div className="text-sm text-gray-200 font-medium leading-snug">{label}</div>
-        )}
-        {!label && !kindLabel && (
-          <div className="text-sm text-gray-500">Conditional routing node</div>
-        )}
-      </div>
+      {(kindLabel || label) && (
+        <div>
+          {kindLabel && (
+            <div className="text-[10px] text-gray-600 uppercase tracking-widest mb-1">{kindLabel}</div>
+          )}
+          {label && (
+            <div className="text-sm text-gray-200 font-medium leading-snug">{label}</div>
+          )}
+        </div>
+      )}
 
       {/* What it decided */}
       <div>
         <SectionLabel>Result</SectionLabel>
         <div className={`flex items-center gap-2 text-sm font-medium ${passed ? "text-green-400" : "text-red-400"}`}>
           <span>{passed ? "✓" : "✗"}</span>
-          <span>{passed ? "Passed — pipeline continues" : "Failed"}</span>
+          <span>{passed ? "Passed" : "Failed"}</span>
+          {nextNodeId && (
+            <span className="text-xs text-gray-500 font-normal ml-1">→ {nextNodeId}</span>
+          )}
         </div>
         {visit.failure_reason && (
           <div className="mt-1 text-xs text-red-400/80">{visit.failure_reason}</div>
         )}
       </div>
+
+      {/* Edge conditions — how routing is decided */}
+      {edges.length > 0 && (
+        <div>
+          <SectionLabel>Routing conditions</SectionLabel>
+          <div className="space-y-1">
+            {edges.map((edge, i) => {
+              const isTaken = edge.target === nextNodeId;
+              return (
+                <div
+                  key={i}
+                  className={`text-xs rounded px-2 py-1.5 flex items-start gap-2 ${
+                    isTaken
+                      ? "bg-blue-500/10 border border-blue-500/25"
+                      : "bg-gray-900/50 border border-transparent"
+                  }`}
+                >
+                  <span className={isTaken ? "text-blue-400 shrink-0" : "text-gray-600 shrink-0"}>→</span>
+                  <div className="min-w-0">
+                    <span className={isTaken ? "text-gray-200 font-medium" : "text-gray-400"}>
+                      {edge.target}
+                    </span>
+                    {edge.condition && (
+                      <div className="text-[10px] text-gray-600 font-mono mt-0.5 break-all">
+                        {edge.condition}
+                      </div>
+                    )}
+                    {edge.loop_restart === "true" && (
+                      <div className="text-[10px] text-amber-600 mt-0.5">↻ loop restart</div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Notes from status.json */}
       {notes && notes !== "conditional pass-through" && (
@@ -650,6 +719,9 @@ export function StageDetailPanel({
           visit={visit}
           stageFiles={stageFiles}
           dotAttrs={dotAttrs}
+          dot={dot}
+          nodeId={nodeId}
+          nextNodeId={stageHistory[selectedHistoryIndex + 1]?.node_id}
         />
       )}
     </div>

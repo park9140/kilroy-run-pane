@@ -59,6 +59,7 @@ export interface VisitedStage {
 
 export interface CycleInfo {
   failingNodeId: string;
+  retryTargetNodeId?: string;  // parsed from DOT graph[retry_target=...]
   signature: string;
   signatureCount: number;
   signatureLimit: number;
@@ -232,6 +233,13 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
       completed_nodes: completedNodes,
     };
 
+    // Parse retry_target from DOT graph attributes to enable accurate cycle-loop node detection
+    let resolvedCycleInfo = cycleInfo;
+    if (resolvedCycleInfo && dot) {
+      const retryTargetMatch = /\bretry_target\s*=\s*"([^"]+)"/.exec(dot);
+      if (retryTargetMatch) resolvedCycleInfo = { ...resolvedCycleInfo, retryTargetNodeId: retryTargetMatch[1] };
+    }
+
     return {
       run,
       containerAlive,
@@ -240,7 +248,7 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
       dot,
       stages,
       stageHistory,
-      cycleInfo,
+      cycleInfo: resolvedCycleInfo,
       format: "attractor",
     };
   } catch (err) {

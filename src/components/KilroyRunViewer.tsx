@@ -69,17 +69,30 @@ export function KilroyRunViewer() {
   const failedNodes = [...nodeLastVisit.entries()].filter(([, v]) => v.status === "fail").map(([k]) => k);
   const highlightNode = [...nodeLastVisit.entries()].find(([, v]) => v.status === "running")?.[0];
 
-  // Cycle node detection: nodes that failed multiple times in the main run loop
+  // Cycle node detection: nodes that form the repeated loop
   const cycleInfo = runState?.cycleInfo;
   const cycleNodes = (() => {
     if (!cycleInfo) return undefined;
     const mainHistory = stageHistory.filter((v) => !v.fan_out_node);
-    const nodeFailCount = new Map<string, number>();
-    mainHistory.forEach((v) => {
-      if (v.status === "fail") nodeFailCount.set(v.node_id, (nodeFailCount.get(v.node_id) ?? 0) + 1);
-    });
-    const nodes = [...nodeFailCount.entries()].filter(([, c]) => c >= 2).map(([id]) => id);
-    // Always include the cycle-breaking node itself
+
+    // If we know the retry_target, identify the exact loop by finding the first
+    // two consecutive visits to retry_target and collecting everything between them.
+    if (cycleInfo.retryTargetNodeId) {
+      const retryTarget = cycleInfo.retryTargetNodeId;
+      const firstVisit = mainHistory.findIndex((v) => v.node_id === retryTarget);
+      const secondVisit = mainHistory.findIndex((v, i) => i > firstVisit && v.node_id === retryTarget);
+      if (firstVisit >= 0 && secondVisit > firstVisit) {
+        // Nodes from firstVisit up to (but not including) secondVisit = one complete loop iteration
+        const loopNodes = new Set(mainHistory.slice(firstVisit, secondVisit).map((v) => v.node_id));
+        loopNodes.add(cycleInfo.failingNodeId); // ensure breaker node is always included
+        return [...loopNodes];
+      }
+    }
+
+    // Fallback: nodes visited ≥2 times that appear before the failing node
+    const nodeVisitCount = new Map<string, number>();
+    mainHistory.forEach((v) => nodeVisitCount.set(v.node_id, (nodeVisitCount.get(v.node_id) ?? 0) + 1));
+    const nodes = [...nodeVisitCount.entries()].filter(([, c]) => c >= 2).map(([id]) => id);
     if (!nodes.includes(cycleInfo.failingNodeId)) nodes.push(cycleInfo.failingNodeId);
     return nodes;
   })();

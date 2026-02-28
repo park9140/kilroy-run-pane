@@ -57,6 +57,7 @@ export interface VisitedStage {
 
 export interface CycleInfo {
   failingNodeId: string;
+  retryTargetNodeId?: string;
   signature: string;
   signatureCount: number;
   signatureLimit: number;

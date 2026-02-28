@@ -186,6 +186,9 @@ const GLOW_FILTERS = `
   <filter id="glow-active" x="-50%" y="-50%" width="200%" height="200%">
     <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="#f59e0b" flood-opacity="1"/>
   </filter>
+  <filter id="glow-cycle" x="-50%" y="-50%" width="200%" height="200%">
+    <feDropShadow dx="0" dy="0" stdDeviation="5" flood-color="#f97316" flood-opacity="0.9"/>
+  </filter>
 `;
 
 export function DotPreview({
@@ -410,7 +413,7 @@ export function DotPreview({
           shape.setAttribute("data-completed", "true");
         }
 
-        // Overlay outer glow for selected or active (additive — preserves status color).
+        // Overlay outer glow (additive — preserves status color).
         if (isSelected) {
           shape.setAttribute("filter", "url(#glow-selected)");
           shape.setAttribute("data-selected", "true");
@@ -421,6 +424,9 @@ export function DotPreview({
           }
         } else if (isActive) {
           shape.setAttribute("filter", "url(#glow-active)");
+        } else if (isCycle) {
+          // Static orange glow for all cycle-loop nodes (including successful ones)
+          shape.setAttribute("filter", "url(#glow-cycle)");
         }
       });
 
@@ -509,7 +515,9 @@ export function DotPreview({
 
     if (previewTraversals.size === 0 && futureTraversals.size === 0) return;
 
+    const CYCLE_EDGE_COLOR = "#f97316";  // orange-500 — cycle loop edges
     const FUTURE_EDGE_COLOR = "#4b5563"; // dim gray for future edges
+    const cycleSet = new Set(cycleNodes || []);
     const ns = "http://www.w3.org/2000/svg";
     const graphGroup = svg.querySelector("g#graph0") || svg.querySelector("g");
     if (!graphGroup) return;
@@ -523,7 +531,10 @@ export function DotPreview({
 
       if (!count && !isFuture) return;
 
-      const color = isFuture ? FUTURE_EDGE_COLOR : TRAVERSED_EDGE_COLOR;
+      // Cycle edges: both endpoints are in the cycle node set
+      const [src, dst] = normalized.split("->", 2);
+      const isCycleEdge = !isFuture && cycleSet.size > 0 && cycleSet.has(src) && cycleSet.has(dst);
+      const color = isFuture ? FUTURE_EDGE_COLOR : isCycleEdge ? CYCLE_EDGE_COLOR : TRAVERSED_EDGE_COLOR;
       const strokeWidth = count > 1 ? 1 + (count - 1) * 0.5 : 1;
 
       edgeG.querySelectorAll("path, polyline").forEach((el) => {
@@ -553,12 +564,13 @@ export function DotPreview({
         const group = document.createElementNS(ns, "g");
         group.setAttribute("class", "traversal-badge");
 
+        const badgeColor = isCycleEdge ? CYCLE_EDGE_COLOR : TRAVERSED_EDGE_COLOR;
         const circle = document.createElementNS(ns, "circle");
         circle.setAttribute("cx", String(mid.x));
         circle.setAttribute("cy", String(mid.y));
         circle.setAttribute("r", "8");
         circle.setAttribute("fill", "#0c1a2e");
-        circle.setAttribute("stroke", TRAVERSED_EDGE_COLOR);
+        circle.setAttribute("stroke", badgeColor);
         circle.setAttribute("stroke-width", "1.5");
         group.appendChild(circle);
 
@@ -570,14 +582,14 @@ export function DotPreview({
         text.setAttribute("font-family", "monospace");
         text.setAttribute("font-size", "9");
         text.setAttribute("font-weight", "700");
-        text.setAttribute("fill", TRAVERSED_EDGE_COLOR);
+        text.setAttribute("fill", badgeColor);
         text.textContent = String(count);
         group.appendChild(text);
 
         graphGroup.appendChild(group);
       }
     });
-  }, [stageHistory, hoveredHistoryIndex, svgVersion]);
+  }, [stageHistory, hoveredHistoryIndex, cycleNodes, svgVersion]);
 
   // Add per-node visit count badges (shown when a node is visited more than once).
   useEffect(() => {

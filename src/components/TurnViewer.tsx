@@ -358,7 +358,14 @@ export function TurnViewer({ data }: { data: TurnsData }) {
         )
       )}
 
-      {data.turns.length === 0 && (
+      {/* Final response text from response.md (providers like Gemini don't stream text into events) */}
+      {data.response_text && (
+        <div className="px-1 text-xs text-gray-300 border-t border-gray-800/40 pt-2">
+          <MarkdownContent content={data.response_text} />
+        </div>
+      )}
+
+      {data.turns.length === 0 && !data.response_text && (
         <div className="text-xs text-gray-600">No turns recorded</div>
       )}
     </div>

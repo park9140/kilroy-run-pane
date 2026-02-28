@@ -214,6 +214,11 @@ export function registerRoutes(
       try {
         const raw = await readFile(eventsPath, "utf8");
         const turns = parseEventsTurns(raw);
+        // Attach final response text from response.md when provider doesn't stream text into events
+        try {
+          const responseText = await readFile(join(runDir, node, "response.md"), "utf8");
+          if (responseText.trim()) turns.response_text = responseText;
+        } catch { /* response.md may not exist for tool nodes */ }
         // Attach pricing estimate
         turns.pricing = await computePricing(runDir, node, turns);
         res.json(turns);
@@ -323,6 +328,7 @@ interface TurnsResponse {
   profile?: string;
   turns: (TurnUser | TurnAssistant)[];
   pricing?: PricingEstimate;
+  response_text?: string;
 }
 
 function parseEventsTurns(raw: string): TurnsResponse {

@@ -356,7 +356,7 @@ function summarizeToolBlocks(record: Record<string, unknown>): ToolDetail[] {
       const content = typeof block.content === "string" ? block.content : JSON.stringify(block.content || "");
       lines.push({
         kind: "tool_result",
-        content: content.slice(0, 2000),
+        content,
       });
     }
   }
@@ -431,7 +431,7 @@ function MessageContentBlock({ block }: { block: unknown }) {
     return (
       <div className="border border-gray-800 rounded p-2 bg-gray-950/60">
         <div className="text-sky-300 mb-1">content:tool_result</div>
-        <pre className="text-[11px] text-gray-300 whitespace-pre-wrap">{content.slice(0, 2000)}</pre>
+        <pre className="text-[11px] text-gray-300 whitespace-pre-wrap">{content}</pre>
       </div>
     );
   }

@@ -141,4 +141,6 @@ export interface TurnsData {
   profile?: string;
   turns: Turn[];
   pricing?: PricingEstimate;
+  /** Final LLM response text from response.md (may not appear in event stream for some providers) */
+  response_text?: string;
 }

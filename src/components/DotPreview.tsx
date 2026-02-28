@@ -8,6 +8,7 @@ interface Props {
   highlightNode?: string;
   completedNodes?: string[];
   failedNodes?: string[];
+  cycleNodes?: string[];
   onNodeClick?: (nodeName: string) => void;
   selectedNode?: string;
   nodeAnnotations?: Record<string, string>;
@@ -193,6 +194,7 @@ export function DotPreview({
   highlightNode,
   completedNodes,
   failedNodes,
+  cycleNodes,
   onNodeClick,
   selectedNode,
   nodeAnnotations,
@@ -365,6 +367,7 @@ export function DotPreview({
 
     const completedSet = new Set(completedNodes || []);
     const failedSet = new Set(failedNodes || []);
+    const cycleSet = new Set(cycleNodes || []);
 
     svg.querySelectorAll("g.node").forEach((g) => {
       const title = g.querySelector("title")?.textContent?.trim() || "";
@@ -372,8 +375,9 @@ export function DotPreview({
       const isSelected = selectedNode != null && title === selectedNode;
       const isCompleted = completedSet.has(title);
       const isFailed = failedSet.has(title);
+      const isCycle = cycleSet.has(title);
 
-      if (!isActive && !isSelected && !isFailed && !isCompleted) return;
+      if (!isActive && !isSelected && !isFailed && !isCompleted && !isCycle) return;
 
       g.querySelectorAll("polygon, ellipse, path").forEach((shape) => {
         // Save original values once.
@@ -382,7 +386,7 @@ export function DotPreview({
           shape.setAttribute("data-orig-fill", shape.getAttribute("fill") || "");
         }
 
-        // Apply status-based fill/stroke (priority: active > failed > completed).
+        // Apply status-based fill/stroke (priority: active > failed > cycle > completed).
         if (isActive) {
           shape.setAttribute("stroke", "#f59e0b");
           shape.setAttribute("stroke-width", "2");
@@ -393,6 +397,12 @@ export function DotPreview({
           shape.setAttribute("stroke-width", "2");
           shape.setAttribute("fill", "rgba(239, 68, 68, 0.12)");
           shape.setAttribute("data-failed", "true");
+        } else if (isCycle) {
+          // Orange — cycle nodes that failed repeatedly (between failed red and active amber)
+          shape.setAttribute("stroke", "#f97316");
+          shape.setAttribute("stroke-width", "2");
+          shape.setAttribute("fill", "rgba(249, 115, 22, 0.12)");
+          shape.setAttribute("data-cycle", "true");
         } else if (isCompleted) {
           shape.setAttribute("stroke", "#22c55e");
           shape.setAttribute("stroke-width", "2");
@@ -405,7 +415,7 @@ export function DotPreview({
           shape.setAttribute("filter", "url(#glow-selected)");
           shape.setAttribute("data-selected", "true");
           // Boost stroke-width slightly for selected if not already set by status
-          if (!isActive && !isFailed && !isCompleted) {
+          if (!isActive && !isFailed && !isCycle && !isCompleted) {
             shape.setAttribute("stroke", "#6b7280");
             shape.setAttribute("stroke-width", "1.5");
           }
@@ -420,10 +430,11 @@ export function DotPreview({
         }
         if (isActive) t.setAttribute("fill", "#fbbf24");
         else if (isFailed) t.setAttribute("fill", "#f87171");
+        else if (isCycle) t.setAttribute("fill", "#fb923c");  // orange-400
         else if (isCompleted) t.setAttribute("fill", "#4ade80");
       });
     });
-  }, [highlightNode, completedNodes, failedNodes, dot, selectedNode, svgVersion]);
+  }, [highlightNode, completedNodes, failedNodes, cycleNodes, dot, selectedNode, svgVersion]);
 
   // Highlight traversed edges and add traversal count badges.
   // When hoveredHistoryIndex is set, only highlights edges up to that point;

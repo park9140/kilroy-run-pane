@@ -69,6 +69,21 @@ export function KilroyRunViewer() {
   const failedNodes = [...nodeLastVisit.entries()].filter(([, v]) => v.status === "fail").map(([k]) => k);
   const highlightNode = [...nodeLastVisit.entries()].find(([, v]) => v.status === "running")?.[0];
 
+  // Cycle node detection: nodes that failed multiple times in the main run loop
+  const cycleInfo = runState?.cycleInfo;
+  const cycleNodes = (() => {
+    if (!cycleInfo) return undefined;
+    const mainHistory = stageHistory.filter((v) => !v.fan_out_node);
+    const nodeFailCount = new Map<string, number>();
+    mainHistory.forEach((v) => {
+      if (v.status === "fail") nodeFailCount.set(v.node_id, (nodeFailCount.get(v.node_id) ?? 0) + 1);
+    });
+    const nodes = [...nodeFailCount.entries()].filter(([, c]) => c >= 2).map(([id]) => id);
+    // Always include the cycle-breaking node itself
+    if (!nodes.includes(cycleInfo.failingNodeId)) nodes.push(cycleInfo.failingNodeId);
+    return nodes;
+  })();
+
   // The selected node on the graph = the node_id of the selected history item
   const selectedNodeId = selectedHistoryIndex != null ? stageHistory[selectedHistoryIndex]?.node_id : undefined;
 
@@ -136,13 +151,24 @@ export function KilroyRunViewer() {
             className={`w-2 h-2 rounded-full ${connected ? "bg-green-500" : "bg-red-500"}`}
             title={connected ? "Connected" : "Disconnected"}
           />
-          {run?.failure_reason && (
+          {run?.failure_reason && !cycleInfo && (
             <span className="text-xs text-red-400 truncate max-w-xs" title={run.failure_reason}>
               {run.failure_reason}
             </span>
           )}
         </div>
       </div>
+      {/* Cycle failure banner */}
+      {cycleInfo && (
+        <div className="flex items-center gap-2 px-4 py-1.5 border-b border-orange-800/40 bg-orange-950/40 shrink-0">
+          <span className="text-xs font-semibold text-orange-400">⟳ Deterministic cycle</span>
+          <span className="text-orange-700">·</span>
+          <span className="text-xs font-mono text-orange-500/90 truncate" title={cycleInfo.signature}>{cycleInfo.signature}</span>
+          <span className="ml-auto text-xs text-orange-600 shrink-0">
+            repeated {cycleInfo.signatureCount}/{cycleInfo.signatureLimit}×
+          </span>
+        </div>
+      )}
 
       {/* Body */}
       <div className="flex flex-1 min-h-0">
@@ -166,6 +192,7 @@ export function KilroyRunViewer() {
               className="h-full"
               completedNodes={completedNodes}
               failedNodes={failedNodes}
+              cycleNodes={cycleNodes}
               highlightNode={highlightNode}
               selectedNode={graphSelectedNode}
               onNodeClick={handleGraphNodeClick}

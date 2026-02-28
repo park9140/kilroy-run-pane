@@ -55,6 +55,14 @@ export interface VisitedStage {
   stage_path?: string;
 }
 
+export interface CycleInfo {
+  failingNodeId: string;
+  signature: string;
+  signatureCount: number;
+  signatureLimit: number;
+  isBreaker: boolean;
+}
+
 export interface RunState {
   run: RunRecord;
   containerAlive: boolean;
@@ -63,6 +71,7 @@ export interface RunState {
   dot?: string;
   stages?: StageInfo[];
   stageHistory?: VisitedStage[];
+  cycleInfo?: CycleInfo;
   format?: string;
 }
 

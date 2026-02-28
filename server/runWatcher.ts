@@ -57,6 +57,14 @@ export interface VisitedStage {
   stage_path?: string;
 }
 
+export interface CycleInfo {
+  failingNodeId: string;
+  signature: string;
+  signatureCount: number;
+  signatureLimit: number;
+  isBreaker: boolean;
+}
+
 export interface RunState {
   run: RunRecord;
   containerAlive: boolean;
@@ -65,6 +73,7 @@ export interface RunState {
   dot?: string;
   stages?: StageInfo[];
   stageHistory?: VisitedStage[];
+  cycleInfo?: CycleInfo;
   format: "kilroy-dash" | "attractor";
 }
 
@@ -204,7 +213,7 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
     // Read stage statuses and execution history
     const stages = await readAttractorStages(runDir, completedNodes);
     const progressPath = join(runDir, "progress.ndjson");
-    const stageHistory = await parseProgressHistory(progressPath);
+    const { history: stageHistory, cycleInfo } = await parseProgressHistory(progressPath);
 
     const run: RunRecord = {
       id: runId,
@@ -231,6 +240,7 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
       dot,
       stages,
       stageHistory,
+      cycleInfo,
       format: "attractor",
     };
   } catch (err) {
@@ -239,13 +249,14 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
   }
 }
 
-async function parseProgressHistory(progressPath: string): Promise<VisitedStage[]> {
+async function parseProgressHistory(progressPath: string): Promise<{ history: VisitedStage[]; cycleInfo?: CycleInfo }> {
   try {
     const raw = await readFile(progressPath, "utf8");
     const lines = raw.split("\n");
     // key: "nodeId:attempt" → visit currently in flight
     const inFlight = new Map<string, VisitedStage>();
     const history: VisitedStage[] = [];
+    let cycleInfo: CycleInfo | undefined;
 
     // key: "nodeId:attempt" for main stages, "fanOut/branchKey/nodeId:attempt" for branches
     const branchInFlight = new Map<string, VisitedStage>();
@@ -313,6 +324,27 @@ async function parseProgressHistory(progressPath: string): Promise<VisitedStage[
           continue;
         }
 
+        // ── Cycle detection events ───────────────────────────────────────────
+        if (event === "deterministic_failure_cycle_check" || event === "deterministic_failure_cycle_breaker") {
+          const failing_node_id = typeof ev.node_id === "string" ? ev.node_id : null;
+          const signature = typeof ev.signature === "string" ? ev.signature : "";
+          const signature_count = typeof ev.signature_count === "number" ? ev.signature_count : 0;
+          const signature_limit = typeof ev.signature_limit === "number" ? ev.signature_limit : 0;
+          if (failing_node_id) {
+            // Keep the highest-count (latest) event as the authoritative cycle info
+            if (!cycleInfo || signature_count >= cycleInfo.signatureCount) {
+              cycleInfo = {
+                failingNodeId: failing_node_id,
+                signature,
+                signatureCount: signature_count,
+                signatureLimit: signature_limit,
+                isBreaker: event === "deterministic_failure_cycle_breaker",
+              };
+            }
+          }
+          continue;
+        }
+
         // ── Main stage events ────────────────────────────────────────────────
         const node_id = typeof ev.node_id === "string" ? ev.node_id : null;
         const attempt = typeof ev.attempt === "number" ? ev.attempt : 1;
@@ -343,9 +375,9 @@ async function parseProgressHistory(progressPath: string): Promise<VisitedStage[
         }
       } catch { /* skip malformed */ }
     }
-    return history;
+    return { history, cycleInfo };
   } catch {
-    return [];
+    return { history: [] };
   }
 }
 

@@ -417,31 +417,39 @@ export class RunWatcher extends EventEmitter {
     const state = await this.readRunState(runId, runDir);
     if (state) this.cache.set(runId, state);
 
-    // Watch the run directory for any changes
-    const watcher = chokidar.watch(runDir, {
+    // Debounced update: batch rapid file-change bursts into one re-read
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    const scheduleUpdate = () => {
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(async () => {
+        debounce = null;
+        const newState = await this.readRunState(runId, runDir);
+        if (newState) {
+          this.cache.set(runId, newState);
+          this.emit("update", runId, newState);
+        }
+      }, 200);
+    };
+
+    // Watch the whole run directory tree.
+    // Exclude events.ndjson (LLM streaming — appended every few ms, irrelevant for run
+    // state and resets awaitWriteFinish timers preventing all other change events from
+    // firing) and binary/archive files.
+    const fsWatcher = chokidar.watch(runDir, {
       persistent: false,
       ignoreInitial: true,
-      depth: 1,
-      awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
+      ignored: (filePath: string) => {
+        const base = filePath.split("/").pop() ?? "";
+        return base === "events.ndjson" || base.endsWith(".tgz") || base.endsWith(".gz");
+      },
+      // No awaitWriteFinish — our 200ms debounce serves the same purpose without
+      // blocking events while append-only files are being written.
     });
 
-    watcher.on("change", async () => {
-      const newState = await this.readRunState(runId, runDir);
-      if (newState) {
-        this.cache.set(runId, newState);
-        this.emit("update", runId, newState);
-      }
-    });
+    fsWatcher.on("change", scheduleUpdate);
+    fsWatcher.on("add", scheduleUpdate);
 
-    watcher.on("add", async () => {
-      const newState = await this.readRunState(runId, runDir);
-      if (newState) {
-        this.cache.set(runId, newState);
-        this.emit("update", runId, newState);
-      }
-    });
-
-    this.watchers.set(runId, watcher);
+    this.watchers.set(runId, fsWatcher);
 
     if (state?.run?.status === "executing") {
       this.startPolling(runId, runDir);

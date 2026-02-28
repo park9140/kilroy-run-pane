@@ -16,7 +16,6 @@
     "@viz-js/viz": "^3.24.0",
     "chokidar": "^4.0.3",
     "express": "^4.21.2",
-    "http-proxy-middleware": "^3.0.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",

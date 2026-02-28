@@ -26,10 +26,6 @@ function resolveRunsDirs(): string[] {
 
 const KILROY_RUNS_DIRS = resolveRunsDirs();
 
-// Kilroy-dash URL for proxying stage/DOT/diagnosis data.
-const KILROY_DASH_URL = process.env.KILROY_DASH_URL ?? "http://localhost:8090";
-const KILROY_DASH_TOKEN = process.env.KILROY_DASH_TOKEN ?? "";
-
 // Static files: in production, serve from dist/. In dev, Vite handles the frontend.
 const DIST_DIR = resolve(__dirname, "..", "dist");
 
@@ -44,8 +40,6 @@ const watcher = new RunWatcher(KILROY_RUNS_DIRS);
 registerRoutes(app, {
   runsDirs: KILROY_RUNS_DIRS,
   distDir: DIST_DIR,
-  kilroyDashUrl: KILROY_DASH_URL,
-  kilroyDashToken: KILROY_DASH_TOKEN,
   watcher,
 });
 
@@ -53,7 +47,6 @@ const server = app.listen(PORT, () => {
   console.log(`[kilroy-run-pane] Listening on http://localhost:${PORT}`);
   console.log(`[kilroy-run-pane] Runs dirs:`);
   for (const d of KILROY_RUNS_DIRS) console.log(`[kilroy-run-pane]   - ${d}`);
-  console.log(`[kilroy-run-pane] Kilroy-dash proxy: ${KILROY_DASH_URL}`);
 });
 
 process.on("SIGTERM", () => {

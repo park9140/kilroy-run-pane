@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import type { RunState, StageInfo, VisitedStage, DiagnosisResult } from "../lib/types";
+import type { RunState, StageInfo, VisitedStage } from "../lib/types";
 
 interface RunMonitorState {
   runState: RunState | null;
@@ -24,31 +24,6 @@ export function useRunMonitor(runId: string | undefined): RunMonitorState {
   const retryCount = useRef(0);
   const esRef = useRef<EventSource | null>(null);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Fetch diagnosis (stages) from kilroy-dash proxy
-  const fetchDiagnosis = useCallback(async (id: string) => {
-    try {
-      const res = await fetch(`/api/runs/${encodeURIComponent(id)}/diagnose`);
-      if (!res.ok) return;
-      const data: DiagnosisResult = await res.json();
-      if (data.stages) setStages(data.stages);
-    } catch {
-      // diagnosis is optional — kilroy-dash may not be running
-    }
-  }, []);
-
-  // Fetch DOT content from kilroy-dash proxy
-  const fetchDot = useCallback(async (id: string) => {
-    try {
-      const res = await fetch(`/api/runs/${encodeURIComponent(id)}/dot`);
-      if (!res.ok) return;
-      const data = await res.json();
-      if (typeof data?.dot === "string") setDot(data.dot);
-      else if (typeof data === "string") setDot(data);
-    } catch {
-      // DOT is optional
-    }
-  }, []);
 
   const connect = useCallback((id: string) => {
     if (esRef.current) {
@@ -76,13 +51,9 @@ export function useRunMonitor(runId: string | undefined): RunMonitorState {
         const state = data as RunState;
         setRunState(state);
         setLoading(false);
-        // For attractor format: dot, stages, and stageHistory come directly in the RunState
         if (state.dot) setDot(state.dot);
         if (state.stages?.length) setStages(state.stages);
         if (state.stageHistory?.length) setStageHistory(state.stageHistory);
-        // For kilroy-dash format: fetch from proxy
-        if (!state.dot && state.run?.id) fetchDot(state.run.id);
-        if (!state.stages?.length && state.run?.id) fetchDiagnosis(state.run.id);
       } catch {
         // ignore parse errors
       }
@@ -97,7 +68,7 @@ export function useRunMonitor(runId: string | undefined): RunMonitorState {
       retryCount.current++;
       retryTimer.current = setTimeout(() => connect(id), delay);
     };
-  }, [dot, fetchDiagnosis, fetchDot]);
+  }, []);
 
   useEffect(() => {
     if (!runId) {
@@ -115,10 +86,6 @@ export function useRunMonitor(runId: string | undefined): RunMonitorState {
     retryCount.current = 0;
 
     connect(runId);
-    // Eagerly fetch from kilroy-dash proxy as fallback (attractor format
-    // will override these when the first SSE message arrives with dot/stages)
-    fetchDiagnosis(runId);
-    fetchDot(runId);
 
     return () => {
       if (retryTimer.current) clearTimeout(retryTimer.current);

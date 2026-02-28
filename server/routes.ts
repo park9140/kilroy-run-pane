@@ -1,7 +1,6 @@
 import { readdir, stat, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Express, Request, Response } from "express";
-import { createProxyMiddleware } from "http-proxy-middleware";
 import type { RunWatcher } from "./runWatcher.js";
 
 const SSE_PING_INTERVAL_MS = 15_000;
@@ -11,32 +10,10 @@ export function registerRoutes(
   opts: {
     runsDirs: string[];
     distDir: string;
-    kilroyDashUrl: string;
-    kilroyDashToken: string;
     watcher: RunWatcher;
   }
 ) {
-  const { runsDirs, distDir, kilroyDashUrl, kilroyDashToken, watcher } = opts;
-
-  // Proxy all /api/* to kilroy-dash, except the routes we handle ourselves.
-  // We handle: /api/runs, /api/runs/:id, /api/runs/:id/events
-  // Everything else proxies.
-  const proxyHeaders: Record<string, string> = {};
-  if (kilroyDashToken) {
-    proxyHeaders["Authorization"] = `Bearer ${kilroyDashToken}`;
-  }
-
-  const dashProxy = createProxyMiddleware({
-    target: kilroyDashUrl,
-    changeOrigin: true,
-    on: {
-      proxyReq: (proxyReq) => {
-        if (kilroyDashToken) {
-          proxyReq.setHeader("Authorization", `Bearer ${kilroyDashToken}`);
-        }
-      },
-    },
-  });
+  const { runsDirs, distDir, watcher } = opts;
 
   /** Collect all run IDs across all configured runsDirs, deduped, newest-first. */
   async function listAllRunIds(): Promise<{ id: string; runsDir: string }[]> {
@@ -265,17 +242,6 @@ export function registerRoutes(
     } catch {
       res.status(404).json({ error: "stage not found" });
     }
-  });
-
-  // Proxy all other /api/* requests to kilroy-dash
-  app.use("/api", (req: Request, res: Response, next) => {
-    // Skip routes we handle above
-    if (req.path === "/runs" && req.method === "GET") return next("route");
-    if (req.path === "/runs/summaries" && req.method === "GET") return next("route");
-    if (req.path.match(/^\/runs\/[^/]+$/) && req.method === "GET") return next("route");
-    if (req.path.match(/^\/runs\/[^/]+\/events$/) && req.method === "GET") return next("route");
-    if (req.path.match(/^\/runs\/[^/]+\/stages\//) && req.method === "GET") return next("route");
-    return dashProxy(req, res, next);
   });
 
   // Serve SPA for /run/* routes (must come after API routes)

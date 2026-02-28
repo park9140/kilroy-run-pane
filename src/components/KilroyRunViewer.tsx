@@ -179,7 +179,7 @@ export function KilroyRunViewer() {
                 <div className="text-center space-y-1">
                   <div>No DOT graph available</div>
                   <div className="text-xs text-gray-700">
-                    Ensure kilroy-dash is running on port 8090
+                    DOT graph not found in run manifest
                   </div>
                 </div>
               ) : (

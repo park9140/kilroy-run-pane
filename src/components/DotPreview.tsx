@@ -389,7 +389,8 @@ export function DotPreview({
           shape.setAttribute("data-orig-fill", shape.getAttribute("fill") || "");
         }
 
-        // Apply status-based fill/stroke (priority: active > failed > cycle > completed).
+        // Apply status-based fill/stroke (priority: active > failed > completed).
+        // Cycle nodes intentionally do NOT change color — only glow is applied.
         if (isActive) {
           shape.setAttribute("stroke", "#f59e0b");
           shape.setAttribute("stroke-width", "2");
@@ -400,12 +401,6 @@ export function DotPreview({
           shape.setAttribute("stroke-width", "2");
           shape.setAttribute("fill", "rgba(239, 68, 68, 0.12)");
           shape.setAttribute("data-failed", "true");
-        } else if (isCycle) {
-          // Orange — cycle nodes that failed repeatedly (between failed red and active amber)
-          shape.setAttribute("stroke", "#f97316");
-          shape.setAttribute("stroke-width", "2");
-          shape.setAttribute("fill", "rgba(249, 115, 22, 0.12)");
-          shape.setAttribute("data-cycle", "true");
         } else if (isCompleted) {
           shape.setAttribute("stroke", "#22c55e");
           shape.setAttribute("stroke-width", "2");
@@ -418,14 +413,14 @@ export function DotPreview({
           shape.setAttribute("filter", "url(#glow-selected)");
           shape.setAttribute("data-selected", "true");
           // Boost stroke-width slightly for selected if not already set by status
-          if (!isActive && !isFailed && !isCycle && !isCompleted) {
+          if (!isActive && !isFailed && !isCompleted) {
             shape.setAttribute("stroke", "#6b7280");
             shape.setAttribute("stroke-width", "1.5");
           }
         } else if (isActive) {
           shape.setAttribute("filter", "url(#glow-active)");
         } else if (isCycle) {
-          // Static orange glow for all cycle-loop nodes (including successful ones)
+          // Orange glow only — does not override the node's existing status color
           shape.setAttribute("filter", "url(#glow-cycle)");
         }
       });
@@ -436,8 +431,8 @@ export function DotPreview({
         }
         if (isActive) t.setAttribute("fill", "#fbbf24");
         else if (isFailed) t.setAttribute("fill", "#f87171");
-        else if (isCycle) t.setAttribute("fill", "#fb923c");  // orange-400
         else if (isCompleted) t.setAttribute("fill", "#4ade80");
+        // Cycle nodes: no text color change — the glow on the shape is enough
       });
     });
   }, [highlightNode, completedNodes, failedNodes, cycleNodes, dot, selectedNode, svgVersion]);

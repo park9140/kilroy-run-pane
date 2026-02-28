@@ -72,10 +72,12 @@ export function KilroyRunViewer() {
   const failedNodes = [...nodeLastVisit.entries()].filter(([, v]) => v.status === "fail").map(([k]) => k);
   const highlightNode = [...nodeLastVisit.entries()].find(([, v]) => v.status === "running")?.[0];
 
-  // Cycle node detection: nodes that form the repeated loop
+  // Cycle node detection: nodes that form the repeated loop.
+  // Only highlight once the run has actually terminated in failure — not while still executing.
   const cycleInfo = runState?.cycleInfo;
+  const runFailed = computedStatus === "failed" || computedStatus === "stalled" || computedStatus === "interrupted";
   const cycleNodes = (() => {
-    if (!cycleInfo) return undefined;
+    if (!cycleInfo || !runFailed) return undefined;
     const mainHistory = stageHistory.filter((v) => !v.fan_out_node);
 
     // If we know the retry_target, identify the exact loop by finding the first
@@ -187,8 +189,8 @@ export function KilroyRunViewer() {
           )}
         </div>
       </div>
-      {/* Cycle failure banner */}
-      {cycleInfo && (
+      {/* Cycle failure banner — only shown after the run has terminated */}
+      {cycleInfo && runFailed && (
         <div className="flex items-center gap-2 px-4 py-1.5 border-b border-orange-800/40 bg-orange-950/40 shrink-0">
           <span className="text-xs font-semibold text-orange-400">⟳ Deterministic cycle</span>
           <span className="text-orange-700">·</span>

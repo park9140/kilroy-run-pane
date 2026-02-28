@@ -26,6 +26,7 @@ interface RunSummary {
   goal: string | null;
   started_at: string | null;
   status: string;
+  source_dir?: string | null;
 }
 
 function timeAgo(iso: string): string {
@@ -99,10 +100,16 @@ function RunList() {
   const filtered = useMemo(() => {
     if (!query.trim()) return runs;
     return runs.filter((r) => {
-      const searchable = [r.id, r.graph_name, r.repo, r.goal].filter(Boolean).join(" ");
+      const searchable = [r.id, r.graph_name, r.repo, r.goal, r.source_dir].filter(Boolean).join(" ");
       return fuzzyMatch(searchable, query);
     });
   }, [runs, query]);
+
+  // Show source_dir label only when runs come from more than one distinct dir
+  const multiSource = useMemo(() => {
+    const dirs = new Set(runs.map((r) => r.source_dir).filter(Boolean));
+    return dirs.size > 1;
+  }, [runs]);
 
   if (loading) return <div className="text-gray-500 text-sm">Loading runs…</div>;
 
@@ -128,6 +135,9 @@ function RunList() {
         const ago = run.started_at ? timeAgo(run.started_at) : null;
         // Force re-render via now dependency
         void now;
+        const sourceName = multiSource && run.source_dir
+          ? run.source_dir.split("/").filter(Boolean).pop() ?? run.source_dir
+          : null;
         return (
           <a
             key={run.id}
@@ -151,6 +161,9 @@ function RunList() {
                   )}
                   {run.repo && (
                     <span className="text-xs text-gray-500">{run.repo}</span>
+                  )}
+                  {sourceName && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-500 font-mono">{sourceName}</span>
                   )}
                   {ago && (
                     <span className="text-xs text-gray-600 ml-auto shrink-0">{ago}</span>

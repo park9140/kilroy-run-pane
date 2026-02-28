@@ -383,14 +383,28 @@ async function readAttractorStages(runDir: string, completedNodes: string[]): Pr
 // ─── RunWatcher ───────────────────────────────────────────────────────────────
 
 export class RunWatcher extends EventEmitter {
-  private runsDir: string;
+  private runsDirs: string[];
+  private dirForRun = new Map<string, string>(); // runId → resolved run dir
   private watchers = new Map<string, FSWatcher>();
   private cache = new Map<string, RunState>();
   private polling = new Map<string, ReturnType<typeof setInterval>>();
 
-  constructor(runsDir: string) {
+  constructor(runsDirs: string[]) {
     super();
-    this.runsDir = runsDir;
+    this.runsDirs = runsDirs;
+  }
+
+  getRunsDirs(): string[] { return this.runsDirs; }
+
+  /** Find the directory for a run across all configured runsDirs. */
+  async findRunDir(runId: string): Promise<string | null> {
+    if (this.dirForRun.has(runId)) return this.dirForRun.get(runId)!;
+    for (const dir of this.runsDirs) {
+      const runDir = join(dir, runId);
+      try { await stat(join(runDir, "run.json")); this.dirForRun.set(runId, runDir); return runDir; } catch { /* try next */ }
+      try { await stat(join(runDir, "manifest.json")); this.dirForRun.set(runId, runDir); return runDir; } catch { /* try next */ }
+    }
+    return null;
   }
 
   async watch(runId: string): Promise<RunState | null> {
@@ -398,7 +412,8 @@ export class RunWatcher extends EventEmitter {
       return this.cache.get(runId)!;
     }
 
-    const runDir = join(this.runsDir, runId);
+    const runDir = await this.findRunDir(runId);
+    if (!runDir) return null;
     const state = await this.readRunState(runId, runDir);
     if (state) this.cache.set(runId, state);
 
@@ -428,7 +443,7 @@ export class RunWatcher extends EventEmitter {
 
     this.watchers.set(runId, watcher);
 
-    if (state?.run.status === "executing") {
+    if (state?.run?.status === "executing") {
       this.startPolling(runId, runDir);
     }
 

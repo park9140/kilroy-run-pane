@@ -8,11 +8,23 @@ const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
 const PORT = parseInt(process.env.PORT ?? "3737", 10);
 
-// Resolve the runs directory. Default: ~/.local/state/kilroy/attractor/runs/
-const KILROY_RUNS_DIR = resolve(
-  process.env.KILROY_RUNS_DIR ??
-    join(process.env.HOME ?? "/root", ".local", "state", "kilroy", "attractor", "runs")
-);
+// Resolve one or more runs directories.
+// KILROY_RUNS_DIRS: colon-separated list (takes precedence)
+// KILROY_RUNS_DIR: single dir (legacy, still supported)
+// Default: ~/.local/state/kilroy/attractor/runs/
+function resolveRunsDirs(): string[] {
+  if (process.env.KILROY_RUNS_DIRS) {
+    return process.env.KILROY_RUNS_DIRS.split(":").map((d) => resolve(d)).filter(Boolean);
+  }
+  return [
+    resolve(
+      process.env.KILROY_RUNS_DIR ??
+        join(process.env.HOME ?? "/root", ".local", "state", "kilroy", "attractor", "runs")
+    ),
+  ];
+}
+
+const KILROY_RUNS_DIRS = resolveRunsDirs();
 
 // Kilroy-dash URL for proxying stage/DOT/diagnosis data.
 const KILROY_DASH_URL = process.env.KILROY_DASH_URL ?? "http://localhost:8090";
@@ -27,10 +39,10 @@ app.use(express.json());
 // Serve Vite build assets
 app.use(express.static(DIST_DIR));
 
-const watcher = new RunWatcher(KILROY_RUNS_DIR);
+const watcher = new RunWatcher(KILROY_RUNS_DIRS);
 
 registerRoutes(app, {
-  runsDir: KILROY_RUNS_DIR,
+  runsDirs: KILROY_RUNS_DIRS,
   distDir: DIST_DIR,
   kilroyDashUrl: KILROY_DASH_URL,
   kilroyDashToken: KILROY_DASH_TOKEN,
@@ -39,7 +51,8 @@ registerRoutes(app, {
 
 const server = app.listen(PORT, () => {
   console.log(`[kilroy-run-pane] Listening on http://localhost:${PORT}`);
-  console.log(`[kilroy-run-pane] Runs dir: ${KILROY_RUNS_DIR}`);
+  console.log(`[kilroy-run-pane] Runs dirs:`);
+  for (const d of KILROY_RUNS_DIRS) console.log(`[kilroy-run-pane]   - ${d}`);
   console.log(`[kilroy-run-pane] Kilroy-dash proxy: ${KILROY_DASH_URL}`);
 });
 

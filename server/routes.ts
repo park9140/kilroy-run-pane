@@ -9,14 +9,14 @@ const SSE_PING_INTERVAL_MS = 15_000;
 export function registerRoutes(
   app: Express,
   opts: {
-    runsDir: string;
+    runsDirs: string[];
     distDir: string;
     kilroyDashUrl: string;
     kilroyDashToken: string;
     watcher: RunWatcher;
   }
 ) {
-  const { runsDir, distDir, kilroyDashUrl, kilroyDashToken, watcher } = opts;
+  const { runsDirs, distDir, kilroyDashUrl, kilroyDashToken, watcher } = opts;
 
   // Proxy all /api/* to kilroy-dash, except the routes we handle ourselves.
   // We handle: /api/runs, /api/runs/:id, /api/runs/:id/events
@@ -38,71 +38,105 @@ export function registerRoutes(
     },
   });
 
+  /** Collect all run IDs across all configured runsDirs, deduped, newest-first. */
+  async function listAllRunIds(): Promise<{ id: string; runsDir: string }[]> {
+    const seen = new Set<string>();
+    const results: { id: string; runsDir: string }[] = [];
+    for (const dir of runsDirs) {
+      try {
+        const entries = await readdir(dir, { withFileTypes: true });
+        for (const e of entries) {
+          if (e.isDirectory() && !seen.has(e.name)) {
+            seen.add(e.name);
+            results.push({ id: e.name, runsDir: dir });
+          }
+        }
+      } catch { /* dir may not exist */ }
+    }
+    // Sort by ULID (lexicographic = chronological), newest first
+    results.sort((a, b) => b.id.localeCompare(a.id));
+    return results;
+  }
+
   // List all run IDs
   app.get("/api/runs", async (_req: Request, res: Response) => {
-    try {
-      const entries = await readdir(runsDir, { withFileTypes: true });
-      const runIds = entries
-        .filter((e) => e.isDirectory())
-        .map((e) => e.name)
-        .sort()
-        .reverse(); // newest first (ULID sort)
-      res.json({ run_ids: runIds });
-    } catch {
-      res.json({ run_ids: [] });
-    }
+    const all = await listAllRunIds();
+    res.json({ run_ids: all.map((r) => r.id) });
   });
 
   // Run list with metadata summaries (reads manifest.json per run)
   app.get("/api/runs/summaries", async (_req: Request, res: Response) => {
-    try {
-      const entries = await readdir(runsDir, { withFileTypes: true });
-      const runIds = entries
-        .filter((e) => e.isDirectory())
-        .map((e) => e.name)
-        .sort()
-        .reverse();
-      const summaries = await Promise.all(runIds.map(async (id) => {
+    const all = await listAllRunIds();
+    const summaries = await Promise.all(all.map(async ({ id, runsDir: dir }) => {
+      try {
+        const runDir = join(dir, id);
+        // Try manifest.json (attractor format) first, then run.json (kilroy-dash format)
+        let graph_name: string | null = null;
+        let repo: string | null = null;
+        let goal: string | null = null;
+        let started_at: string | null = null;
+        let status = "running";
+
         try {
-          const manifestRaw = await readFile(join(runsDir, id, "manifest.json"), "utf8");
+          const manifestRaw = await readFile(join(runDir, "manifest.json"), "utf8");
           const manifest = JSON.parse(manifestRaw) as Record<string, unknown>;
-          // First timestamp from progress.ndjson
-          let started_at: string | null = null;
+          graph_name = String(manifest.graph_name ?? "");
+          const repoPath = String(manifest.repo_path ?? "");
+          repo = repoPath ? repoPath.split("/").pop() ?? null : null;
+          const goalStr = String(manifest.goal ?? "");
+          goal = goalStr ? goalStr.slice(0, 200) : null;
+          started_at = typeof manifest.started_at === "string" ? manifest.started_at : null;
+        } catch {
+          // Try kilroy-dash run.json
           try {
-            const progressRaw = await readFile(join(runsDir, id, "progress.ndjson"), "utf8");
+            const runRaw = await readFile(join(runDir, "run.json"), "utf8");
+            const run = JSON.parse(runRaw) as Record<string, unknown>;
+            graph_name = String(run.dot_file ?? "");
+            const repoPath = String(run.repo ?? "");
+            repo = repoPath ? repoPath.split("/").pop() ?? null : null;
+            started_at = typeof run.started_at === "string" ? run.started_at : null;
+          } catch { /* skip */ }
+        }
+
+        // First timestamp from progress.ndjson if started_at not in manifest
+        if (!started_at) {
+          try {
+            const progressRaw = await readFile(join(runDir, "progress.ndjson"), "utf8");
             const firstLine = progressRaw.split("\n").find((l) => l.trim());
             if (firstLine) {
               const ev = JSON.parse(firstLine) as Record<string, unknown>;
               started_at = String(ev.ts ?? ev.timestamp ?? "");
             }
           } catch { /* ok */ }
-          // Status from live.json or final.json
-          let status = "running";
+        }
+
+        // Status from final.json, live.json, or run.json
+        try {
+          const finalRaw = await readFile(join(runDir, "final.json"), "utf8");
+          const final = JSON.parse(finalRaw) as Record<string, unknown>;
+          const s = String(final.status ?? "");
+          status = s === "success" ? "completed" : s === "fail" ? "failed" : "running";
+        } catch {
           try {
-            const liveRaw = await readFile(join(runsDir, id, "live.json"), "utf8");
+            const liveRaw = await readFile(join(runDir, "live.json"), "utf8");
             const live = JSON.parse(liveRaw) as Record<string, unknown>;
             if (live.event === "completed") status = "completed";
             else if (live.event === "failed") status = "failed";
             else if (live.event === "interrupted") status = "interrupted";
           } catch { /* ok */ }
-          const repoPath = String(manifest.repo_path ?? "");
-          const goal = String(manifest.goal ?? "");
-          return {
-            id,
-            graph_name: String(manifest.graph_name ?? ""),
-            repo: repoPath ? repoPath.split("/").pop() ?? null : null,
-            goal: goal ? goal.slice(0, 200) : null,
-            started_at: started_at || null,
-            status,
-          };
-        } catch {
-          return { id, graph_name: null, repo: null, goal: null, started_at: null, status: "unknown" };
         }
-      }));
-      res.json({ runs: summaries });
-    } catch {
-      res.json({ runs: [] });
-    }
+
+        return { id, graph_name, repo, goal, started_at: started_at || null, status, source_dir: dir };
+      } catch {
+        return { id, graph_name: null, repo: null, goal: null, started_at: null, status: "unknown", source_dir: dir };
+      }
+    }));
+    // Sort by started_at descending if available, otherwise leave ULID order
+    summaries.sort((a, b) => {
+      if (a.started_at && b.started_at) return b.started_at.localeCompare(a.started_at);
+      return b.id.localeCompare(a.id);
+    });
+    res.json({ runs: summaries });
   });
 
   // Get current run state snapshot
@@ -166,18 +200,22 @@ export function registerRoutes(
     // Reject path traversal; allow slashes for branch paths
     if (rest.includes("..") || rest.startsWith("/")) { res.status(400).json({ error: "invalid node" }); return; }
 
+    // Resolve which dir contains this run
+    const runDir = await watcher.findRunDir(id);
+    if (!runDir) { res.status(404).json({ error: "run not found" }); return; }
+
     const parts = rest.split("/");
     const lastPart = parts[parts.length - 1];
 
     // /turns endpoint: parse events.ndjson into structured conversation turns
     if (lastPart === "turns" && parts.length >= 2) {
       const node = parts.slice(0, -1).join("/");
-      const eventsPath = join(runsDir, id, node, "events.ndjson");
+      const eventsPath = join(runDir, node, "events.ndjson");
       try {
         const raw = await readFile(eventsPath, "utf8");
         const turns = parseEventsTurns(raw);
         // Attach pricing estimate
-        turns.pricing = await computePricing(runsDir, id, node, turns);
+        turns.pricing = await computePricing(runDir, node, turns);
         res.json(turns);
       } catch {
         res.status(404).json({ error: "events not found" });
@@ -194,7 +232,7 @@ export function registerRoutes(
       const node = parts.slice(0, -1).join("/");
       const file = lastPart;
       if (file.includes("..")) { res.status(400).json({ error: "invalid path" }); return; }
-      const filePath = join(runsDir, id, node, file);
+      const filePath = join(runDir, node, file);
       try {
         await stat(filePath);
         res.sendFile(filePath);
@@ -206,7 +244,7 @@ export function registerRoutes(
 
     // Metadata fetch
     const node = rest;
-    const stageDir = join(runsDir, id, node);
+    const stageDir = join(runDir, node);
     try {
       let statusData: Record<string, unknown> = {};
       try {
@@ -358,8 +396,7 @@ function parseEventsTurns(raw: string): TurnsResponse {
 }
 
 async function computePricing(
-  runsDir: string,
-  runId: string,
+  runDir: string,
   node: string,
   turnsData: TurnsResponse,
 ): Promise<PricingEstimate | undefined> {
@@ -368,7 +405,7 @@ async function computePricing(
     let modelId = turnsData.model ?? "";
     const profile = turnsData.profile ?? "";
     try {
-      const pvRaw = await readFile(join(runsDir, runId, node, "provider_used.json"), "utf8");
+      const pvRaw = await readFile(join(runDir, node, "provider_used.json"), "utf8");
       const pv = JSON.parse(pvRaw) as Record<string, unknown>;
       if (pv.model) modelId = String(pv.model);
     } catch { /* ok */ }
@@ -397,7 +434,7 @@ async function computePricing(
     let promptPrice: number | null = null;
     let completionPrice: number | null = null;
     try {
-      const manifestRaw = await readFile(join(runsDir, runId, "manifest.json"), "utf8");
+      const manifestRaw = await readFile(join(runDir, "manifest.json"), "utf8");
       const manifest = JSON.parse(manifestRaw) as Record<string, unknown>;
       const modeldbObj = manifest.modeldb as Record<string, unknown> | undefined;
       const modelInfoPath = modeldbObj?.openrouter_model_info_path as string | undefined;

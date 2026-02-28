@@ -19,6 +19,52 @@ interface Props {
   hoveredHistoryIndex?: number | null;
 }
 
+/** Parse DOT source to identify nodes with git worktree/branch operations.
+ *  - shape=component  → fan-out (creates worktrees + branches)
+ *  - receives 2+ edges from component children → fan-in (merge / harvest)
+ */
+function parseGitOpsFromDot(dot: string): Map<string, "branch" | "merge"> {
+  const result = new Map<string, "branch" | "merge">();
+
+  // Find nodes with shape=component
+  const componentNodes = new Set<string>();
+  const nodeAttrRe = /(\w+)\s*\[([^\]]+)\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = nodeAttrRe.exec(dot)) !== null) {
+    if (/shape\s*=\s*component/i.test(m[2])) {
+      componentNodes.add(m[1]);
+      result.set(m[1], "branch");
+    }
+  }
+
+  // Build edge maps
+  const outgoing = new Map<string, Set<string>>();
+  const incoming = new Map<string, string[]>();
+  const edgeRe = /(\w+)\s*->\s*(\w+)/g;
+  while ((m = edgeRe.exec(dot)) !== null) {
+    const [, src, dst] = m;
+    if (!outgoing.has(src)) outgoing.set(src, new Set());
+    outgoing.get(src)!.add(dst);
+    if (!incoming.has(dst)) incoming.set(dst, []);
+    incoming.get(dst)!.push(src);
+  }
+
+  // Branch children = direct successors of component nodes
+  const branchChildren = new Set<string>();
+  for (const comp of componentNodes) {
+    for (const child of outgoing.get(comp) ?? []) branchChildren.add(child);
+  }
+
+  // Fan-in nodes = receive 2+ edges from branch children
+  for (const [node, srcs] of incoming) {
+    if (srcs.filter((s) => branchChildren.has(s)).length >= 2) {
+      result.set(node, "merge");
+    }
+  }
+
+  return result;
+}
+
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 5;
 const ZOOM_STEP = 0.15;
@@ -446,8 +492,8 @@ export function DotPreview({
       if (counts.fail > 0) badges.push({ count: counts.fail, bgColor: "#450a0a", strokeColor: "#f87171", textColor: "#f87171" });
 
       badges.forEach((badge, idx) => {
-        // Center the first badge exactly on the top-right corner of the node box
-        const cx = topRightX + idx * 16;
+        // Start visit badges 8px right of top-right corner; git op icon sits 8px left of topRightX
+        const cx = topRightX + 8 + idx * 16;
         const cy = topRightY;
 
         const group = document.createElementNS(ns, "g");
@@ -478,6 +524,72 @@ export function DotPreview({
       });
     });
   }, [stageHistory, svgVersion]);
+
+  // Add git op icon badges (⑂ branch/worktree, ⊕ merge) to identified nodes.
+  // Placed at topRightX - 16 so they sit just left of the visit count circles.
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg || !dot) return;
+
+    svg.querySelectorAll(".git-op-badge").forEach((el) => el.remove());
+
+    const gitOps = parseGitOpsFromDot(dot);
+    if (gitOps.size === 0) return;
+
+    const ns = "http://www.w3.org/2000/svg";
+    const graphGroup = svg.querySelector("g#graph0") || svg.querySelector("g");
+    if (!graphGroup) return;
+
+    svg.querySelectorAll("g.node").forEach((nodeG) => {
+      const title = nodeG.querySelector("title")?.textContent?.trim() || "";
+      const op = gitOps.get(title);
+      if (!op) return;
+
+      const bbox = (nodeG as SVGGraphicsElement).getBBox();
+      // Sit just left of where visit count badges start (topRightX + 0)
+      const cx = bbox.x + bbox.width - 8;
+      const cy = bbox.y;
+
+      const isBranch = op === "branch";
+      const icon    = isBranch ? "⑂" : "⊕";
+      const bgColor     = isBranch ? "#1e1b4b" : "#042f2e";
+      const strokeColor = isBranch ? "#818cf8" : "#2dd4bf";
+      const textColor   = isBranch ? "#818cf8" : "#2dd4bf";
+      const tooltip     = isBranch
+        ? "Worktree / branch fan-out"
+        : "Branch merge / fan-in";
+
+      const group = document.createElementNS(ns, "g");
+      group.setAttribute("class", "git-op-badge");
+
+      const circle = document.createElementNS(ns, "circle");
+      circle.setAttribute("cx", String(cx));
+      circle.setAttribute("cy", String(cy));
+      circle.setAttribute("r", "8");
+      circle.setAttribute("fill", bgColor);
+      circle.setAttribute("stroke", strokeColor);
+      circle.setAttribute("stroke-width", "1.5");
+      group.appendChild(circle);
+
+      const text = document.createElementNS(ns, "text");
+      text.setAttribute("x", String(cx));
+      text.setAttribute("y", String(cy));
+      text.setAttribute("text-anchor", "middle");
+      text.setAttribute("dominant-baseline", "central");
+      text.setAttribute("font-family", "ui-sans-serif, system-ui, sans-serif");
+      text.setAttribute("font-size", "9");
+      text.setAttribute("font-weight", "700");
+      text.setAttribute("fill", textColor);
+      text.textContent = icon;
+      group.appendChild(text);
+
+      const titleEl = document.createElementNS(ns, "title");
+      titleEl.textContent = tooltip;
+      group.appendChild(titleEl);
+
+      graphGroup.appendChild(group);
+    });
+  }, [dot, svgVersion]);
 
   // Render feedback response annotations as bubbles on outgoing edges.
   useEffect(() => {

@@ -219,6 +219,10 @@ export function DotPreview({
   const pointerDownPos = useRef<{ x: number; y: number } | null>(null);
   const wasDragging = useRef(false);
   const pinchRef = useRef<{ startDist: number; startScale: number; midX: number; midY: number } | null>(null);
+  // Stable ref so SVG click listeners always call the latest onNodeClick even after
+  // stageHistory changes (which don't re-trigger the [dot] effect).
+  const onNodeClickRef = useRef(onNodeClick);
+  useEffect(() => { onNodeClickRef.current = onNodeClick; });
 
   // Reset transform when DOT content changes.
   useEffect(() => {
@@ -321,9 +325,7 @@ export function DotPreview({
             node.addEventListener("click", (ev) => {
               if (wasDragging.current) return;
               const title = g.querySelector("title")?.textContent?.trim();
-              if (title && onNodeClick) {
-                onNodeClick(title);
-              }
+              if (title) onNodeClickRef.current?.(title);
               ev.stopPropagation();
             });
           });
@@ -879,7 +881,7 @@ export function DotPreview({
       edgeHit.style.cursor = "pointer";
       edgeHit.addEventListener("click", (ev) => {
         ev.stopPropagation();
-        onNodeClick?.(nodeName);
+        onNodeClickRef.current?.(nodeName);
       });
       graphGroup.appendChild(edgeHit);
 
@@ -923,7 +925,7 @@ export function DotPreview({
         graphGroup.appendChild(group);
       });
     });
-  }, [reportAnnotationsByNode, onReportAnnotationClick, onNodeClick, dot, svgVersion]);
+  }, [reportAnnotationsByNode, onReportAnnotationClick, dot, svgVersion]);
 
   // Apply transform to SVG.
   useEffect(() => {

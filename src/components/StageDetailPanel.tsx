@@ -388,27 +388,47 @@ function ToolNodeContent({
 // ── Fan-out node view ─────────────────────────────────────────────────────────
 
 function FanOutNodeContent({
-  stageFiles, dotAttrs,
+  stageFiles, dotAttrs, nodeId, stageHistory, onSelectVisit,
 }: {
   stageFiles: StageFiles;
   dotAttrs: Record<string, string>;
+  nodeId: string;
+  stageHistory: VisitedStage[];
+  onSelectVisit: (index: number) => void;
 }) {
   const { contextUpdates } = stageFiles;
   const rawResults = contextUpdates["parallel.results"];
-  const branches: ParallelBranch[] = isParallelResults(rawResults) ? rawResults : [];
+  const completedBranches: ParallelBranch[] = isParallelResults(rawResults) ? rawResults : [];
   const joinNode = typeof contextUpdates["parallel.join_node"] === "string"
     ? contextUpdates["parallel.join_node"] : null;
   const label = dotAttrs.label;
 
-  const succeeded = branches.filter((b) => b.outcome?.status === "success").length;
-  const failed = branches.length - succeeded;
+  // Always build live branch view from stageHistory — works during AND after execution
+  const branchVisits = useMemo(() => {
+    const grouped = new Map<string, { visit: VisitedStage; index: number }[]>();
+    stageHistory.forEach((v, i) => {
+      if (v.fan_out_node !== nodeId) return;
+      const key = v.branch_key ?? "unknown";
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key)!.push({ visit: v, index: i });
+    });
+    return grouped;
+  }, [stageHistory, nodeId]);
 
-  if (branches.length === 0) {
-    return (
-      <div className="flex-1 p-3 text-xs text-gray-500">
-        No branch results recorded yet.
-      </div>
-    );
+  // Merge: use completedBranches for metadata (last_response, notes), branchVisits for live status
+  const branchKeys = completedBranches.length > 0
+    ? completedBranches.map((b) => b.branch_key ?? "?")
+    : [...branchVisits.keys()];
+
+  const totalBranches = branchKeys.length;
+  const runningCount = [...branchVisits.values()].filter((visits) =>
+    visits.some(({ visit }) => visit.status === "running")
+  ).length;
+  const passedCount = completedBranches.filter((b) => b.outcome?.status === "success").length;
+  const failedCount = completedBranches.filter((b) => b.outcome?.status !== "success" && b.outcome?.status != null).length;
+
+  if (totalBranches === 0) {
+    return <div className="flex-1 p-3 text-xs text-gray-500">No branch results recorded yet.</div>;
   }
 
   return (
@@ -416,51 +436,97 @@ function FanOutNodeContent({
       {/* What it does */}
       {label && <div className="text-sm text-gray-300 font-medium">{label}</div>}
 
-      {/* What it did: branch summary */}
+      {/* Summary line */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-        <span className="text-gray-400">{branches.length} parallel {branches.length === 1 ? "branch" : "branches"}</span>
-        {succeeded > 0 && <span className="text-green-400">✓ {succeeded} passed</span>}
-        {failed > 0 && <span className="text-red-400">✗ {failed} failed</span>}
+        <span className="text-gray-400">{totalBranches} parallel {totalBranches === 1 ? "branch" : "branches"}</span>
+        {runningCount > 0 && <span className="text-amber-400 animate-pulse">● {runningCount} running</span>}
+        {passedCount > 0 && <span className="text-green-400">✓ {passedCount} passed</span>}
+        {failedCount > 0 && <span className="text-red-400">✗ {failedCount} failed</span>}
         {joinNode && <span className="text-gray-600">→ {joinNode}</span>}
       </div>
 
-      {/* How it did it: branch details */}
+      {/* Branch cards */}
       <div className="space-y-2">
-        {branches.map((b, i) => {
-          const status = b.outcome?.status ?? "unknown";
-          const isOk = status === "success";
-          const lastResponse = typeof b.outcome?.context_updates?.last_response === "string"
-            ? b.outcome.context_updates.last_response : null;
+        {branchKeys.map((branchKey, i) => {
+          const meta = completedBranches.find((b) => (b.branch_key ?? "?") === branchKey);
+          const visits = branchVisits.get(branchKey) ?? [];
+          const isRunning = visits.some(({ visit }) => visit.status === "running");
+          const isOk = meta ? meta.outcome?.status === "success" : !isRunning;
+          const isFailed = meta ? meta.outcome?.status === "fail" : false;
+          const lastResponse = typeof meta?.outcome?.context_updates?.last_response === "string"
+            ? meta.outcome.context_updates.last_response : null;
+
           return (
             <div
-              key={b.branch_key ?? i}
-              className={`border rounded p-2 bg-gray-900/50 ${isOk ? "border-green-900/40" : "border-red-900/40"}`}
+              key={branchKey ?? i}
+              className={`border rounded bg-gray-900/50 ${
+                isRunning ? "border-amber-700/40"
+                : isFailed ? "border-red-900/40"
+                : isOk ? "border-green-900/40"
+                : "border-gray-700/40"
+              }`}
             >
-              <div className="flex items-center gap-1.5 mb-1">
-                <span className={`text-xs ${isOk ? "text-green-400" : "text-red-400"}`}>
-                  {isOk ? "✓" : "✗"}
+              {/* Branch header */}
+              <div className="flex items-center gap-1.5 px-2 py-1.5">
+                <span className={`text-xs shrink-0 ${
+                  isRunning ? "text-amber-400 animate-pulse"
+                  : isFailed ? "text-red-400"
+                  : isOk ? "text-green-400"
+                  : "text-gray-500"
+                }`}>
+                  {isRunning ? "●" : isFailed ? "✗" : isOk ? "✓" : "–"}
                 </span>
-                <span className="text-xs font-mono font-medium text-gray-200">
-                  {b.branch_key ?? `branch-${i}`}
+                <span className="text-xs font-mono font-medium text-gray-200 flex-1 truncate">
+                  {branchKey}
                 </span>
-                {b.start_node_id && b.last_node_id && b.start_node_id !== b.last_node_id && (
-                  <span className="text-[10px] text-gray-500">
-                    {b.start_node_id} → {b.last_node_id}
-                  </span>
-                )}
-                {(b.completed_nodes?.length ?? 0) > 0 && (
-                  <span className="ml-auto text-[10px] text-gray-600">
-                    {b.completed_nodes!.length} node{b.completed_nodes!.length !== 1 ? "s" : ""}
+                {meta?.last_node_id && meta.start_node_id !== meta.last_node_id && (
+                  <span className="text-[10px] text-gray-600 shrink-0">
+                    {meta.start_node_id} → {meta.last_node_id}
                   </span>
                 )}
               </div>
-              {lastResponse && (
-                <div className="text-[11px] text-gray-400 leading-relaxed line-clamp-3 whitespace-pre-wrap">
-                  {lastResponse}
+
+              {/* Node links — each node visited in this branch */}
+              {visits.length > 0 && (
+                <div className="border-t border-gray-800/60 px-2 py-1 space-y-0.5">
+                  {visits.map(({ visit, index }) => {
+                    const nodeRunning = visit.status === "running";
+                    const nodePassed = visit.status === "pass";
+                    const nodeFailed = visit.status === "fail";
+                    return (
+                      <button
+                        key={index}
+                        onClick={() => onSelectVisit(index)}
+                        className="w-full flex items-center gap-1.5 text-left px-1 py-0.5 rounded hover:bg-gray-800/60 transition-colors"
+                      >
+                        <span className={`text-[10px] shrink-0 ${
+                          nodeRunning ? "text-amber-400 animate-pulse"
+                          : nodeFailed ? "text-red-400"
+                          : nodePassed ? "text-green-400"
+                          : "text-gray-600"
+                        }`}>
+                          {nodeRunning ? "●" : nodeFailed ? "✗" : nodePassed ? "✓" : "–"}
+                        </span>
+                        <span className="text-[10px] font-mono text-gray-300 truncate flex-1">
+                          {visit.node_id}
+                        </span>
+                        {visit.duration_s != null && (
+                          <span className="text-[10px] text-gray-600 shrink-0 tabular-nums">
+                            {visit.duration_s}s
+                          </span>
+                        )}
+                        <span className="text-[10px] text-blue-500 shrink-0 opacity-60">↗</span>
+                      </button>
+                    );
+                  })}
                 </div>
               )}
-              {b.outcome?.notes && (
-                <div className="text-[10px] text-gray-600 mt-0.5 italic">{b.outcome.notes}</div>
+
+              {/* Last response preview */}
+              {lastResponse && (
+                <div className="border-t border-gray-800/60 px-2 py-1.5 text-[11px] text-gray-500 leading-relaxed line-clamp-3 whitespace-pre-wrap">
+                  {lastResponse}
+                </div>
               )}
             </div>
           );
@@ -711,6 +777,9 @@ export function StageDetailPanel({
         <FanOutNodeContent
           stageFiles={stageFiles}
           dotAttrs={dotAttrs}
+          nodeId={nodeId}
+          stageHistory={stageHistory}
+          onSelectVisit={(idx) => { onSelectVisit(idx); }}
         />
       )}
 

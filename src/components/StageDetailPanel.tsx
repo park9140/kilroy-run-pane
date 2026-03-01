@@ -184,67 +184,33 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 type LLMTab = "response" | "turns" | "prompt";
 
-/** Collapsible row for one previous visit — lazily loads response.md on open */
+/** Row for one previous visit — shows only the metadata we already have */
 function PreviousVisitItem({
-  run, visit, visitNum, stagePath,
+  visit, visitNum,
 }: {
-  run: RunRecord;
   visit: VisitedStage;
   visitNum: number;
-  stagePath: string;
 }) {
-  const [open, setOpen] = useState(false);
-  const [content, setContent] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  const toggle = () => {
-    if (!open && content === null) {
-      setLoading(true);
-      fetchFileContent(run.id, stagePath, "response.md")
-        .then(setContent)
-        .catch(() => setContent("(no response file for this visit)"))
-        .finally(() => setLoading(false));
-    }
-    setOpen((v) => !v);
-  };
-
   const icon = visit.status === "pass" ? "✓" : visit.status === "fail" ? "✗" : "●";
   const iconCls = visit.status === "pass" ? "text-green-400" : visit.status === "fail" ? "text-red-400" : "text-amber-400";
   const dur = visit.duration_s != null ? fmtDuration(visit.duration_s) : "";
 
   return (
-    <div className="border-b border-gray-800/50 last:border-0">
-      <button
-        onClick={toggle}
-        className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-gray-800/40 text-left transition-colors"
-      >
-        <span className={`text-xs shrink-0 ${iconCls}`}>{icon}</span>
-        <span className="text-xs text-gray-400">Visit #{visitNum}</span>
-        {visit.restartIndex != null && visit.restartIndex > 0 && (
-          <span className="text-[10px] text-gray-600">↻{visit.restartIndex}</span>
-        )}
-        {dur && <span className="text-[10px] text-gray-600 tabular-nums">{dur}</span>}
-        <span className="text-[10px] text-gray-600 tabular-nums">{fmtTime(visit.started_at)}</span>
-        {visit.failure_reason && (
-          <span className="text-[10px] text-red-400/60 truncate flex-1" title={visit.failure_reason}>
-            {visit.failure_reason}
-          </span>
-        )}
-        <span className={`ml-auto text-[10px] shrink-0 ${open ? "text-blue-400" : "text-gray-600"}`}>
-          {open ? "▴" : "▾"}
-        </span>
-      </button>
-      {open && (
-        <div className="px-3 pb-3 border-t border-gray-800/40">
-          {loading ? (
-            <div className="text-xs text-gray-500 py-2">Loading…</div>
-          ) : content ? (
-            <FileVisualizer fileName="response.md" mime="text/markdown" content={content} />
-          ) : (
-            <div className="text-xs text-gray-500 italic py-1">No response file for this visit</div>
+    <div className="border-b border-gray-800/50 last:border-0 px-3 py-1.5 flex items-start gap-2">
+      <span className={`text-xs shrink-0 mt-0.5 ${iconCls}`}>{icon}</span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-2 flex-wrap">
+          <span className="text-xs text-gray-400">Visit #{visitNum}</span>
+          {visit.restartIndex != null && visit.restartIndex > 0 && (
+            <span className="text-[10px] text-gray-600">↻{visit.restartIndex}</span>
           )}
+          <span className="text-[10px] text-gray-600 tabular-nums">{fmtTime(visit.started_at)}</span>
+          {dur && <span className="text-[10px] text-gray-500 tabular-nums">{dur}</span>}
         </div>
-      )}
+        {visit.failure_reason && (
+          <div className="text-[10px] text-red-400/70 mt-0.5 break-words">{visit.failure_reason}</div>
+        )}
+      </div>
     </div>
   );
 }
@@ -340,15 +306,6 @@ function LLMNodeContent({
 
   return (
     <>
-      {/* Note: attractor overwrites the stage directory on each retry within the same
-          restart level, so visits that share a stagePath always show the latest attempt's
-          files. We surface this honestly when other visits share our path. */}
-      {otherVisits.some((v) => v.stagePath === stagePath) && (
-        <div className="px-3 py-1 text-[10px] text-amber-400/50 bg-amber-900/10 border-b border-gray-800 shrink-0">
-          Files are overwritten per retry — showing the most recent attempt's output for this run level
-        </div>
-      )}
-
       {/* Tab bar with visit badge */}
       <div className="flex items-center border-b border-gray-800 shrink-0 overflow-x-auto">
         {visibleTabs.map(({ id, label }) => (
@@ -420,7 +377,7 @@ function LLMNodeContent({
           {showOtherVisits && (
             <div className="max-h-72 overflow-auto border-t border-gray-800/50">
               {otherVisits.map(({ visit: v, visitNum: vn, stagePath: sp }) => (
-                <PreviousVisitItem key={sp} run={run} visit={v} visitNum={vn} stagePath={sp} />
+                <PreviousVisitItem key={sp + vn} visit={v} visitNum={vn} />
               ))}
             </div>
           )}

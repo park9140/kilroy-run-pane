@@ -252,8 +252,8 @@ export function registerRoutes(
     const worktreePath = state?.worktreePath;
     if (!worktreePath) { res.status(404).json({ error: "no worktree" }); return; }
 
-    // Recursively list files under worktree/.ai/ and also include status.json at root
-    const aiDir = join(worktreePath, ".ai");
+    // Skip .git regardless of whether it's a file or dir (git worktrees use a .git file)
+    const SKIP = new Set([".git", "node_modules"]);
     type WorkspaceFile = { path: string; name: string; size: number; mtime: number };
     const files: WorkspaceFile[] = [];
 
@@ -261,26 +261,21 @@ export function registerRoutes(
       try {
         const entries = await readdir(dir, { withFileTypes: true });
         for (const e of entries) {
+          if (SKIP.has(e.name)) continue;
           const rel = prefix ? `${prefix}/${e.name}` : e.name;
           if (e.isDirectory()) {
             await scanDir(join(dir, e.name), rel);
           } else if (e.isFile()) {
             try {
               const s = await stat(join(dir, e.name));
-              files.push({ path: `.ai/${rel}`, name: e.name, size: s.size, mtime: s.mtimeMs });
+              files.push({ path: rel, name: e.name, size: s.size, mtime: s.mtimeMs });
             } catch { /* skip */ }
           }
         }
       } catch { /* dir missing */ }
     }
 
-    await scanDir(aiDir, "");
-    // Also include status.json at worktree root if present
-    try {
-      const s = await stat(join(worktreePath, "status.json"));
-      files.unshift({ path: "status.json", name: "status.json", size: s.size, mtime: s.mtimeMs });
-    } catch { /* not present */ }
-
+    await scanDir(worktreePath, "");
     files.sort((a, b) => a.path.localeCompare(b.path));
     res.json({ files, worktreePath });
   });
@@ -316,20 +311,27 @@ export function registerRoutes(
     const worktreePath = state?.worktreePath;
     if (!worktreePath) { res.status(404).json({ error: "no worktree" }); return; }
 
-    const aiDir = join(worktreePath, ".ai");
     res.setHeader("Content-Type", "application/zip");
     res.setHeader("Content-Disposition", `attachment; filename="workspace-${id.slice(-8)}.zip"`);
 
     const archive = archiver("zip", { zlib: { level: 6 } });
     archive.on("error", (err) => { res.destroy(err); });
     archive.pipe(res);
-    archive.directory(aiDir, ".ai");
-    // Also include status.json at root if it exists
-    try {
-      await stat(join(worktreePath, "status.json"));
-      archive.file(join(worktreePath, "status.json"), { name: "status.json" });
-    } catch { /* not present */ }
+    archive.glob("**", { cwd: worktreePath, ignore: [".git", ".git/**", "node_modules", "node_modules/**"], dot: true });
     await archive.finalize();
+  });
+
+  // Workspace: reveal worktree in Finder (macOS only)
+  app.post("/api/runs/:id/workspace/reveal", async (req: Request, res: Response) => {
+    const id = String(req.params["id"] ?? "");
+    const state = watcher.getState(id) ?? await watcher.watch(id);
+    const worktreePath = state?.worktreePath;
+    if (!worktreePath) { res.status(404).json({ error: "no worktree" }); return; }
+    const { execFile } = await import("node:child_process");
+    execFile("open", [worktreePath], (err) => {
+      if (err) { res.status(500).json({ error: String(err) }); return; }
+      res.json({ ok: true });
+    });
   });
 
   // Serve SPA for /run/* routes (must come after API routes)

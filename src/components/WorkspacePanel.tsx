@@ -24,9 +24,120 @@ interface WorkspacePanelProps {
 function fileIcon(name: string): string {
   if (name.endsWith(".md")) return "M↓";
   if (name.endsWith(".json")) return "{}";
-  if (name.endsWith(".sh")) return "⚙";
-  if (name.endsWith(".ts") || name.endsWith(".tsx") || name.endsWith(".js")) return "JS";
+  if (name.endsWith(".sh")) return "sh";
+  if (name.endsWith(".ts") || name.endsWith(".tsx")) return "ts";
+  if (name.endsWith(".js") || name.endsWith(".jsx")) return "js";
+  if (name.endsWith(".py")) return "py";
+  if (name.endsWith(".go")) return "go";
+  if (name.endsWith(".rs")) return "rs";
+  if (name.endsWith(".yaml") || name.endsWith(".yml")) return "ym";
+  if (name.endsWith(".toml")) return "tm";
+  if (name.endsWith(".dot")) return "gv";
   return "·";
+}
+
+// ── Tree building ──────────────────────────────────────────────────────────
+
+interface DirNode {
+  type: "dir";
+  name: string;
+  path: string;
+  children: TreeItem[];
+}
+
+interface FileNode {
+  type: "file";
+  name: string;
+  path: string;
+  file: WorkspaceFile;
+}
+
+type TreeItem = DirNode | FileNode;
+
+function buildTree(files: WorkspaceFile[]): TreeItem[] {
+  const root: TreeItem[] = [];
+  const dirMap = new Map<string, DirNode>();
+
+  for (const file of files) {
+    const parts = file.path.split("/");
+    let children = root;
+    let currentPath = "";
+
+    for (let i = 0; i < parts.length - 1; i++) {
+      const dirName = parts[i];
+      currentPath = currentPath ? `${currentPath}/${dirName}` : dirName;
+      let dir = dirMap.get(currentPath);
+      if (!dir) {
+        dir = { type: "dir", name: dirName, path: currentPath, children: [] };
+        dirMap.set(currentPath, dir);
+        children.push(dir);
+      }
+      children = dir.children;
+    }
+    children.push({ type: "file", name: parts[parts.length - 1], path: file.path, file });
+  }
+  return root;
+}
+
+function TreeView({
+  items, expandedDirs, onToggleDir, selectedPath, onSelectFile, depth = 0,
+}: {
+  items: TreeItem[];
+  expandedDirs: Set<string>;
+  onToggleDir: (path: string) => void;
+  selectedPath: string | null;
+  onSelectFile: (path: string) => void;
+  depth?: number;
+}) {
+  return (
+    <>
+      {items.map((item) => {
+        if (item.type === "dir") {
+          const isExpanded = expandedDirs.has(item.path);
+          return (
+            <div key={item.path}>
+              <button
+                onClick={() => onToggleDir(item.path)}
+                style={{ paddingLeft: `${depth * 10 + 6}px` }}
+                className="w-full text-left flex items-center gap-1 py-0.5 pr-2 hover:bg-gray-800/40 transition-colors"
+              >
+                <span className="text-[9px] text-gray-600 shrink-0 w-3">{isExpanded ? "▾" : "▸"}</span>
+                <span className="text-[10px] font-mono text-gray-500">{item.name}/</span>
+              </button>
+              {isExpanded && (
+                <TreeView
+                  items={item.children}
+                  expandedDirs={expandedDirs}
+                  onToggleDir={onToggleDir}
+                  selectedPath={selectedPath}
+                  onSelectFile={onSelectFile}
+                  depth={depth + 1}
+                />
+              )}
+            </div>
+          );
+        } else {
+          const isSelected = item.path === selectedPath;
+          return (
+            <button
+              key={item.path}
+              onClick={() => onSelectFile(item.path)}
+              style={{ paddingLeft: `${depth * 10 + 6}px` }}
+              className={`w-full text-left flex items-center gap-1.5 py-0.5 pr-2 border-l-2 transition-colors ${
+                isSelected ? "border-blue-500 bg-gray-700/50" : "border-transparent hover:bg-gray-800/40"
+              }`}
+            >
+              <span className="text-[8px] text-gray-600 font-mono w-5 shrink-0 text-right">{fileIcon(item.name)}</span>
+              <span className={`text-[10px] font-mono truncate flex-1 ${isSelected ? "text-gray-100" : "text-gray-400"}`}>
+                {item.name}
+              </span>
+              <span className="text-[9px] text-gray-700 shrink-0 tabular-nums">{fmtSize(item.file.size)}</span>
+            </button>
+          );
+        }
+      })}
+    </>
+  );
 }
 
 function fmtSize(bytes: number): string {
@@ -193,6 +304,17 @@ export function WorkspacePanel({ runId, isExecuting, onClose }: WorkspacePanelPr
   const [loadingContent, setLoadingContent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
+  // Which directories are expanded in the tree (default: .ai)
+  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(() => new Set([".ai"]));
+
+  const toggleDir = useCallback((path: string) => {
+    setExpandedDirs((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }, []);
 
   const fetchFiles = useCallback(async () => {
     try {
@@ -205,9 +327,11 @@ export function WorkspacePanel({ runId, isExecuting, onClose }: WorkspacePanelPr
       const d = await res.json() as WorkspaceData;
       setData(d);
       setError(null);
-      // Auto-select work_queue.json or spec.md on first load
+      // Auto-select .ai/work_queue.json, .ai/spec.md, or first file on first load
       if (!selectedPath && d.files.length > 0) {
-        const preferred = d.files.find((f) => f.name === "work_queue.json" || f.name === "spec.md");
+        const preferred = d.files.find((f) =>
+          f.path === ".ai/work_queue.json" || f.path === ".ai/spec.md"
+        );
         setSelectedPath((preferred ?? d.files[0]).path);
       }
     } catch (e) {
@@ -248,6 +372,10 @@ export function WorkspacePanel({ runId, isExecuting, onClose }: WorkspacePanelPr
     return () => clearInterval(id);
   }, [runId, selectedPath, isExecuting]);
 
+  const handleReveal = () => {
+    fetch(`/api/runs/${runId}/workspace/reveal`, { method: "POST" }).catch(() => {});
+  };
+
   const handleDownload = async () => {
     setDownloading(true);
     try {
@@ -281,9 +409,17 @@ export function WorkspacePanel({ runId, isExecuting, onClose }: WorkspacePanelPr
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           <button
+            onClick={handleReveal}
+            disabled={!data}
+            title="Open worktree in Finder"
+            className="text-[10px] px-2 py-0.5 rounded border border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            ⌘ Finder
+          </button>
+          <button
             onClick={handleDownload}
             disabled={!data || downloading}
-            title="Download workspace files as zip"
+            title="Download workspace as zip"
             className="text-[10px] px-2 py-0.5 rounded border border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             {downloading ? "…" : "⬇ zip"}
@@ -305,32 +441,18 @@ export function WorkspacePanel({ runId, isExecuting, onClose }: WorkspacePanelPr
         </div>
       ) : (
         <div className="flex-1 min-h-0 flex flex-col">
-          {/* File list */}
-          <div className="shrink-0 border-b border-gray-800 max-h-44 overflow-y-auto">
+          {/* File tree */}
+          <div className="shrink-0 border-b border-gray-800 max-h-56 overflow-y-auto">
             {data.files.length === 0 ? (
               <div className="px-3 py-2 text-xs text-gray-600">No files found</div>
             ) : (
-              data.files.map((f) => {
-                const isSelected = f.path === selectedPath;
-                return (
-                  <button
-                    key={f.path}
-                    onClick={() => setSelectedPath(f.path)}
-                    className={`w-full text-left flex items-center gap-2 px-3 py-1.5 hover:bg-gray-800/60 transition-colors border-l-2 ${
-                      isSelected ? "bg-gray-700/50 border-blue-500" : "border-transparent"
-                    }`}
-                  >
-                    <span className="text-[9px] text-gray-600 font-mono w-5 shrink-0 text-center">
-                      {fileIcon(f.name)}
-                    </span>
-                    <span className={`text-xs font-mono truncate flex-1 ${isSelected ? "text-gray-100" : "text-gray-300"}`}>
-                      {f.path}
-                    </span>
-                    <span className="text-[9px] text-gray-600 shrink-0 tabular-nums">{fmtSize(f.size)}</span>
-                    <span className="text-[9px] text-gray-700 shrink-0 tabular-nums">{formatAge(f.mtime)}</span>
-                  </button>
-                );
-              })
+              <TreeView
+                items={buildTree(data.files)}
+                expandedDirs={expandedDirs}
+                onToggleDir={toggleDir}
+                selectedPath={selectedPath}
+                onSelectFile={setSelectedPath}
+              />
             )}
           </div>
 

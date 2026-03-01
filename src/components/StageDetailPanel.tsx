@@ -185,12 +185,13 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 type LLMTab = "response" | "turns" | "prompt";
 
 function LLMNodeContent({
-  run, stagePath, stageFiles, isLatestVisit,
+  run, stagePath, stageFiles, isLatestVisit, isRunning,
 }: {
   run: RunRecord;
   stagePath: string;
   stageFiles: StageFiles;
   isLatestVisit: boolean;
+  isRunning?: boolean;
 }) {
   const [tab, setTab] = useState<LLMTab>("response");
   const [responseContent, setResponseContent] = useState<string | null>(null);
@@ -205,6 +206,25 @@ function LLMNodeContent({
     setTurnsData(null);
     setLoading(false);
   }, [stagePath]);
+
+  // While the node is running, re-fetch the active tab's content in-place every few seconds.
+  useEffect(() => {
+    if (!isRunning) return;
+    const poll = async () => {
+      if (tab === "response" && stageFiles.hasResponse) {
+        const content = await fetchFileContent(run.id, stagePath, "response.md").catch(() => null);
+        if (content !== null) setResponseContent(content);
+      } else if (tab === "turns" && stageFiles.hasTurns) {
+        const data = await fetchTurns(run.id, stagePath).catch(() => null);
+        if (data !== null) setTurnsData(data);
+      } else if (tab === "prompt" && stageFiles.hasPrompt) {
+        const content = await fetchFileContent(run.id, stagePath, "prompt.md").catch(() => null);
+        if (content !== null) setPromptContent(content);
+      }
+    };
+    const id = setInterval(poll, 2500);
+    return () => clearInterval(id);
+  }, [isRunning, tab, stageFiles, run.id, stagePath]);
 
   // Default to first available tab when stageFiles loads
   useEffect(() => {
@@ -675,6 +695,16 @@ export function StageDetailPanel({
     fetchStageFiles(run.id, stagePath).then(setStageFiles);
   }, [run.id, stagePath]);
 
+  // While the node is running, re-poll the file listing so new files become visible.
+  const isRunning = visit?.status === "running";
+  useEffect(() => {
+    if (!stagePath || !isRunning) return;
+    const id = setInterval(() => {
+      fetchStageFiles(run.id, stagePath).then(setStageFiles);
+    }, 2500);
+    return () => clearInterval(id);
+  }, [run.id, stagePath, isRunning]);
+
   // Classify the node
   const nodeKind = useMemo(
     () => getNodeKind(dotAttrs, stageFiles.files, stageFiles.contextUpdates),
@@ -776,6 +806,7 @@ export function StageDetailPanel({
           stagePath={stagePath}
           stageFiles={stageFiles}
           isLatestVisit={isLatestVisit}
+          isRunning={isRunning}
         />
       )}
 

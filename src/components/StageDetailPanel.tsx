@@ -198,6 +198,14 @@ function LLMNodeContent({
   const [turnsData, setTurnsData] = useState<TurnsData | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // Reset all cached content when the stage changes so stale content isn't shown.
+  useEffect(() => {
+    setResponseContent(null);
+    setPromptContent(null);
+    setTurnsData(null);
+    setLoading(false);
+  }, [stagePath]);
+
   // Default to first available tab when stageFiles loads
   useEffect(() => {
     if (stageFiles.hasResponse) setTab("response");

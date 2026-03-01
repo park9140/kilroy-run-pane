@@ -174,6 +174,7 @@ export function StageSidebar({ run, stageHistory, selectedHistoryIndex, onSelect
               let iconColor = "text-gray-600";
               if (visit.status === "pass") { icon = "✓"; iconColor = "text-green-400"; }
               else if (visit.status === "fail") { icon = "✗"; iconColor = "text-red-400"; }
+              else if (visit.status === "interrupted") { icon = "~"; iconColor = "text-amber-600"; }
               else if (isRunning) { icon = "●"; iconColor = "text-amber-400 animate-pulse"; }
 
               return (

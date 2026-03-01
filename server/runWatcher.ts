@@ -250,9 +250,11 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
       }
     } catch { /* no progress.ndjson */ }
 
-    // Check PID liveness — try latest dir first, then root
+    // Check PID liveness — always check regardless of final.json.
+    // A resumed run rewrites run.pid but may have a stale final.json from the
+    // previous failure; the live PID is the authoritative signal.
     let containerAlive = false;
-    if (!finalStatus && hasCheckpoint) {
+    if (hasCheckpoint) {
       for (const dir of [latestDir, runDir]) {
         try {
           const pidRaw = await readFile(join(dir, "run.pid"), "utf8");
@@ -262,12 +264,14 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
       }
     }
 
-    // Determine status
+    // Determine status — live PID overrides stale final.json (resume case)
     let status: RunStatus;
-    if (finalStatus) {
+    if (containerAlive) {
+      status = "executing";
+    } else if (finalStatus) {
       status = finalStatus;
     } else if (hasCheckpoint) {
-      status = containerAlive ? "executing" : "interrupted";
+      status = "interrupted";
     } else {
       status = "pending";
     }
@@ -297,6 +301,16 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
       if (ci) mergedCycleInfo = ci;
     }
     const cycleInfo = mergedCycleInfo;
+
+    // Remap orphaned "running" stages to "interrupted" when the run has terminated.
+    // These are stages that received a start event but no end event because the
+    // process was killed.  Showing them as pulsing "running" on a finished run
+    // is misleading; "interrupted" communicates what actually happened.
+    if (!containerAlive && finalStatus) {
+      for (const v of stageHistory) {
+        if (v.status === "running") v.status = "interrupted";
+      }
+    }
 
     // Merge stages from all dirs; later dirs override earlier for same node_id
     const stageMap = new Map<string, StageInfo>();
@@ -521,6 +535,8 @@ export class RunWatcher extends EventEmitter {
   private watchers = new Map<string, FSWatcher>();
   private cache = new Map<string, RunState>();
   private polling = new Map<string, ReturnType<typeof setInterval>>();
+  // Reference-count of active SSE connections per run — watcher is torn down at 0.
+  private sseRefs = new Map<string, number>();
 
   constructor(runsDirs: string[]) {
     super();
@@ -540,9 +556,30 @@ export class RunWatcher extends EventEmitter {
     return null;
   }
 
+  /**
+   * One-time read — returns state without setting up a file watcher.
+   * Use this for snapshot REST endpoints. Returns cached state if a watcher
+   * is already active for this run.
+   */
+  async readOnce(runId: string): Promise<RunState | null> {
+    if (this.cache.has(runId)) return this.cache.get(runId)!;
+    const runDir = await this.findRunDir(runId);
+    if (!runDir) return null;
+    return this.readRunState(runId, runDir);
+  }
+
+  /**
+   * Start watching a run (called when an SSE connection opens).
+   * Uses polling to avoid EMFILE — only state-relevant files are checked.
+   * Call sseDisconnect() when the SSE connection closes.
+   */
   async watch(runId: string): Promise<RunState | null> {
-    if (this.cache.has(runId)) {
-      return this.cache.get(runId)!;
+    // Increment SSE ref count
+    this.sseRefs.set(runId, (this.sseRefs.get(runId) ?? 0) + 1);
+
+    // If already watching, return cached state
+    if (this.watchers.has(runId)) {
+      return this.cache.get(runId) ?? null;
     }
 
     const runDir = await this.findRunDir(runId);
@@ -564,24 +601,28 @@ export class RunWatcher extends EventEmitter {
       }, 200);
     };
 
-    // Watch the whole run directory tree.
-    // Exclude events.ndjson (LLM streaming — appended every few ms, irrelevant for run
-    // state and resets awaitWriteFinish timers preventing all other change events from
-    // firing) and binary/archive files.
+    // Watch only state-relevant files using polling to avoid EMFILE.
+    // usePolling replaces kqueue/inotify with setInterval+stat so no file
+    // descriptors are consumed regardless of how deep the directory tree is.
     const fsWatcher = chokidar.watch(runDir, {
       persistent: false,
       ignoreInitial: true,
+      usePolling: true,
+      interval: 1000,
       ignored: (filePath: string) => {
         const base = filePath.split("/").pop() ?? "";
-        return base === "events.ndjson" || base.endsWith(".tgz") || base.endsWith(".gz");
+        const STATE_FILES = new Set([
+          "progress.ndjson", "final.json", "checkpoint.json",
+          "run.json", "live.json", "manifest.json",
+        ]);
+        // Let directories through so chokidar can recurse into restart-N/ subdirs
+        if (!base.includes(".")) return false;
+        return !STATE_FILES.has(base);
       },
-      // No awaitWriteFinish — our 200ms debounce serves the same purpose without
-      // blocking events while append-only files are being written.
     });
 
     fsWatcher.on("change", scheduleUpdate);
     fsWatcher.on("add", scheduleUpdate);
-
     this.watchers.set(runId, fsWatcher);
 
     if (state?.run?.status === "executing") {
@@ -589,6 +630,17 @@ export class RunWatcher extends EventEmitter {
     }
 
     return state;
+  }
+
+  /** Called when an SSE connection closes. Tears down the watcher when all clients disconnect. */
+  sseDisconnect(runId: string) {
+    const refs = (this.sseRefs.get(runId) ?? 1) - 1;
+    if (refs <= 0) {
+      this.sseRefs.delete(runId);
+      this.unwatch(runId);
+    } else {
+      this.sseRefs.set(runId, refs);
+    }
   }
 
   private startPolling(runId: string, runDir: string) {

@@ -36,6 +36,7 @@ function StatusBadge({ status }: { status: string }) {
     s === "pass" ? "bg-green-500/20 text-green-400" :
     s === "fail" ? "bg-red-500/20 text-red-400" :
     s === "running" ? "bg-amber-500/20 text-amber-400 animate-pulse" :
+    s === "interrupted" ? "bg-amber-900/20 text-amber-600" :
     "bg-gray-500/20 text-gray-400";
   return <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold ${cls}`}>{status}</span>;
 }
@@ -191,8 +192,8 @@ function PreviousVisitItem({
   visit: VisitedStage;
   visitNum: number;
 }) {
-  const icon = visit.status === "pass" ? "✓" : visit.status === "fail" ? "✗" : "●";
-  const iconCls = visit.status === "pass" ? "text-green-400" : visit.status === "fail" ? "text-red-400" : "text-amber-400";
+  const icon = visit.status === "pass" ? "✓" : visit.status === "fail" ? "✗" : visit.status === "interrupted" ? "~" : "●";
+  const iconCls = visit.status === "pass" ? "text-green-400" : visit.status === "fail" ? "text-red-400" : visit.status === "interrupted" ? "text-amber-600" : "text-amber-400";
   const dur = visit.duration_s != null ? fmtDuration(visit.duration_s) : "";
 
   return (
@@ -755,6 +756,14 @@ export function StageDetailPanel({
     [visitsForNode, selectedHistoryIndex, nodeId], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
+  // For non-latest visits, read from the archived visit subdir (e.g. implement/visit_1/).
+  // The attractor archives each visit as visit_1/, visit_2/, … and the latest visit's
+  // files live directly in the node directory.  visitNum is the 1-based index among all
+  // visits to this node in stageHistory.
+  const effectiveStagePath = isLatestVisit
+    ? stagePath
+    : `${stagePath}/visit_${visitNum}`;
+
   // DOT attribute parsing for this node
   const dotAttrs = useMemo(() => parseNodeDotAttrs(dot ?? "", nodeId), [dot, nodeId]);
 
@@ -763,10 +772,10 @@ export function StageDetailPanel({
   // attempt's files are what we get; refetching ensures we see the freshest listing).
   const [stageFiles, setStageFiles] = useState<StageFiles>(EMPTY_STAGE_FILES);
   useEffect(() => {
-    if (!stagePath) return;
+    if (!effectiveStagePath) return;
     setStageFiles(EMPTY_STAGE_FILES);
-    fetchStageFiles(run.id, stagePath).then(setStageFiles);
-  }, [run.id, stagePath, visitNum]); // eslint-disable-line react-hooks/exhaustive-deps
+    fetchStageFiles(run.id, effectiveStagePath).then(setStageFiles);
+  }, [run.id, effectiveStagePath]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // While the node is running, re-poll the file listing so new files become visible.
   const isRunning = visit?.status === "running";
@@ -777,6 +786,8 @@ export function StageDetailPanel({
     }, 2500);
     return () => clearInterval(id);
   }, [run.id, stagePath, isRunning]);
+
+  const hasLLMContent = stageFiles.hasResponse || stageFiles.hasTurns || stageFiles.hasPrompt;
 
   // Classify the node
   const nodeKind = useMemo(
@@ -821,8 +832,8 @@ export function StageDetailPanel({
           <div className="flex flex-wrap gap-1">
             {visitsForNode.map(({ visit: v, index }, visitNum) => {
               const isSelected = index === selectedHistoryIndex;
-              const icon = v.status === "pass" ? "✓" : v.status === "fail" ? "✗" : "●";
-              const iconCls = v.status === "pass" ? "text-green-400" : v.status === "fail" ? "text-red-400" : "text-amber-400";
+              const icon = v.status === "pass" ? "✓" : v.status === "fail" ? "✗" : v.status === "interrupted" ? "~" : "●";
+              const iconCls = v.status === "pass" ? "text-green-400" : v.status === "fail" ? "text-red-400" : v.status === "interrupted" ? "text-amber-600" : "text-amber-400";
               const dur = v.duration_s != null ? fmtDuration(v.duration_s) : "…";
               const restartIdx = v.restartIndex ?? 0;
               return (
@@ -873,10 +884,11 @@ export function StageDetailPanel({
       </div>
 
       {/* ── Node-type-specific body ── */}
-      {nodeKind === "llm" && isLatestVisit && (
+      {/* Latest visit always gets full tabs. Non-latest gets tabs if its attempt_N/ archive exists. */}
+      {nodeKind === "llm" && (isLatestVisit || hasLLMContent) && (
         <LLMNodeContent
           run={run}
-          stagePath={stagePath}
+          stagePath={effectiveStagePath}
           stageFiles={stageFiles}
           isLatestVisit={isLatestVisit}
           isRunning={isRunning}
@@ -885,7 +897,8 @@ export function StageDetailPanel({
           otherVisits={otherVisitsForLLM}
         />
       )}
-      {nodeKind === "llm" && !isLatestVisit && otherVisitsForLLM.length > 0 && (
+      {/* Fallback for older runs that pre-date attempt archiving */}
+      {nodeKind === "llm" && !isLatestVisit && !hasLLMContent && otherVisitsForLLM.length > 0 && (
         <div className="flex-1 overflow-auto min-h-0">
           <div className="px-3 pt-2 pb-1 text-[10px] text-gray-600 uppercase tracking-wide font-medium">
             Other visits

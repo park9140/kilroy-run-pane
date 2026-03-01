@@ -43,7 +43,7 @@ export interface RunRecord {
 export interface VisitedStage {
   node_id: string;
   attempt: number;
-  status: "pass" | "fail" | "running";
+  status: "pass" | "fail" | "running" | "interrupted";
   started_at: string;
   finished_at?: string;
   duration_s?: number;

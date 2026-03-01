@@ -390,13 +390,14 @@ function ToolNodeContent({
 // ── Fan-out node view ─────────────────────────────────────────────────────────
 
 function FanOutNodeContent({
-  stageFiles, dotAttrs, nodeId, stageHistory, onSelectVisit,
+  stageFiles, dotAttrs, nodeId, stageHistory, onSelectVisit, nodeLabels,
 }: {
   stageFiles: StageFiles;
   dotAttrs: Record<string, string>;
   nodeId: string;
   stageHistory: VisitedStage[];
   onSelectVisit: (index: number) => void;
+  nodeLabels?: Map<string, string>;
 }) {
   const { contextUpdates } = stageFiles;
   const rawResults = contextUpdates["parallel.results"];
@@ -786,6 +787,7 @@ export function StageDetailPanel({
           nodeId={nodeId}
           stageHistory={stageHistory}
           onSelectVisit={(idx) => { onSelectVisit(idx); }}
+          nodeLabels={nodeLabels}
         />
       )}
 

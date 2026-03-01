@@ -184,20 +184,89 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 type LLMTab = "response" | "turns" | "prompt";
 
+/** Collapsible row for one previous visit — lazily loads response.md on open */
+function PreviousVisitItem({
+  run, visit, visitNum, stagePath,
+}: {
+  run: RunRecord;
+  visit: VisitedStage;
+  visitNum: number;
+  stagePath: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [content, setContent] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const toggle = () => {
+    if (!open && content === null) {
+      setLoading(true);
+      fetchFileContent(run.id, stagePath, "response.md")
+        .then(setContent)
+        .catch(() => setContent("(no response file for this visit)"))
+        .finally(() => setLoading(false));
+    }
+    setOpen((v) => !v);
+  };
+
+  const icon = visit.status === "pass" ? "✓" : visit.status === "fail" ? "✗" : "●";
+  const iconCls = visit.status === "pass" ? "text-green-400" : visit.status === "fail" ? "text-red-400" : "text-amber-400";
+  const dur = visit.duration_s != null ? fmtDuration(visit.duration_s) : "";
+
+  return (
+    <div className="border-b border-gray-800/50 last:border-0">
+      <button
+        onClick={toggle}
+        className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-gray-800/40 text-left transition-colors"
+      >
+        <span className={`text-xs shrink-0 ${iconCls}`}>{icon}</span>
+        <span className="text-xs text-gray-400">Visit #{visitNum}</span>
+        {visit.restartIndex != null && visit.restartIndex > 0 && (
+          <span className="text-[10px] text-gray-600">↻{visit.restartIndex}</span>
+        )}
+        {dur && <span className="text-[10px] text-gray-600 tabular-nums">{dur}</span>}
+        <span className="text-[10px] text-gray-600 tabular-nums">{fmtTime(visit.started_at)}</span>
+        {visit.failure_reason && (
+          <span className="text-[10px] text-red-400/60 truncate flex-1" title={visit.failure_reason}>
+            {visit.failure_reason}
+          </span>
+        )}
+        <span className={`ml-auto text-[10px] shrink-0 ${open ? "text-blue-400" : "text-gray-600"}`}>
+          {open ? "▴" : "▾"}
+        </span>
+      </button>
+      {open && (
+        <div className="px-3 pb-3 border-t border-gray-800/40">
+          {loading ? (
+            <div className="text-xs text-gray-500 py-2">Loading…</div>
+          ) : content ? (
+            <FileVisualizer fileName="response.md" mime="text/markdown" content={content} />
+          ) : (
+            <div className="text-xs text-gray-500 italic py-1">No response file for this visit</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LLMNodeContent({
-  run, stagePath, stageFiles, isLatestVisit, isRunning,
+  run, stagePath, stageFiles, isLatestVisit, isRunning, visitNum, totalVisits, otherVisits,
 }: {
   run: RunRecord;
   stagePath: string;
   stageFiles: StageFiles;
   isLatestVisit: boolean;
   isRunning?: boolean;
+  visitNum: number;
+  totalVisits: number;
+  otherVisits: { visit: VisitedStage; visitNum: number; stagePath: string }[];
 }) {
   const [tab, setTab] = useState<LLMTab>("response");
   const [responseContent, setResponseContent] = useState<string | null>(null);
   const [promptContent, setPromptContent] = useState<string | null>(null);
   const [turnsData, setTurnsData] = useState<TurnsData | null>(null);
   const [loading, setLoading] = useState(false);
+  const [showOtherVisits, setShowOtherVisits] = useState(false);
 
   // Reset all cached content when the stage changes so stale content isn't shown.
   useEffect(() => {
@@ -205,6 +274,7 @@ function LLMNodeContent({
     setPromptContent(null);
     setTurnsData(null);
     setLoading(false);
+    setShowOtherVisits(false);
   }, [stagePath]);
 
   // While the node is running, re-fetch the active tab's content in-place every few seconds.
@@ -268,14 +338,8 @@ function LLMNodeContent({
 
   return (
     <>
-      {!isLatestVisit && stageFiles.hasResponse && (
-        <div className="px-3 py-1.5 text-[10px] text-amber-400/60 bg-amber-900/10 border-b border-gray-800 shrink-0">
-          Showing files from most recent execution
-        </div>
-      )}
-
-      {/* Tab bar */}
-      <div className="flex border-b border-gray-800 shrink-0 overflow-x-auto">
+      {/* Tab bar with visit badge */}
+      <div className="flex items-center border-b border-gray-800 shrink-0 overflow-x-auto">
         {visibleTabs.map(({ id, label }) => (
           <button
             key={id}
@@ -289,10 +353,18 @@ function LLMNodeContent({
             {label}
           </button>
         ))}
+        {totalVisits > 1 && (
+          <span className="ml-auto px-3 text-[10px] text-gray-600 shrink-0 whitespace-nowrap tabular-nums">
+            visit {visitNum}/{totalVisits}
+          </span>
+        )}
+        {isRunning && (
+          <span className="px-2 text-[10px] text-amber-400/70 animate-pulse shrink-0">live</span>
+        )}
       </div>
 
       {/* Tab content */}
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto min-h-0">
         {tab === "response" && (
           <div className="p-3">
             {loading && responseContent === null ? (
@@ -321,6 +393,28 @@ function LLMNodeContent({
           </div>
         )}
       </div>
+
+      {/* Other visits — collapsible section */}
+      {otherVisits.length > 0 && (
+        <div className="shrink-0 border-t border-gray-800">
+          <button
+            onClick={() => setShowOtherVisits((v) => !v)}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-gray-800/40 transition-colors"
+          >
+            <span className="text-[10px] text-gray-600">{showOtherVisits ? "▴" : "▾"}</span>
+            <span className="text-[10px] text-gray-500 uppercase tracking-wide font-medium">
+              {otherVisits.length} other visit{otherVisits.length !== 1 ? "s" : ""}
+            </span>
+          </button>
+          {showOtherVisits && (
+            <div className="max-h-72 overflow-auto border-t border-gray-800/50">
+              {otherVisits.map(({ visit: v, visitNum: vn, stagePath: sp }) => (
+                <PreviousVisitItem key={sp} run={run} visit={v} visitNum={vn} stagePath={sp} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </>
   );
 }
@@ -684,6 +778,15 @@ export function StageDetailPanel({
     visitsForNode.length > 0 &&
     visitsForNode[visitsForNode.length - 1].index === selectedHistoryIndex;
 
+  // Visit number (1-based) and other visits for the LLM content panel
+  const visitNum = visitsForNode.findIndex(({ index }) => index === selectedHistoryIndex) + 1;
+  const otherVisitsForLLM = useMemo(
+    () => visitsForNode
+      .map(({ visit: v, index }, i) => ({ visit: v, visitNum: i + 1, stagePath: v.stage_path ?? v.node_id }))
+      .filter((_, i) => visitsForNode[i].index !== selectedHistoryIndex),
+    [visitsForNode, selectedHistoryIndex, nodeId], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
   // DOT attribute parsing for this node
   const dotAttrs = useMemo(() => parseNodeDotAttrs(dot ?? "", nodeId), [dot, nodeId]);
 
@@ -807,6 +910,9 @@ export function StageDetailPanel({
           stageFiles={stageFiles}
           isLatestVisit={isLatestVisit}
           isRunning={isRunning}
+          visitNum={visitNum || 1}
+          totalVisits={visitsForNode.length}
+          otherVisits={otherVisitsForLLM}
         />
       )}
 

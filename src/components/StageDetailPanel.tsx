@@ -268,14 +268,16 @@ function LLMNodeContent({
   const [loading, setLoading] = useState(false);
   const [showOtherVisits, setShowOtherVisits] = useState(false);
 
-  // Reset all cached content when the stage changes so stale content isn't shown.
+  // Reset all cached content when the visit changes (stagePath OR visitNum) so stale
+  // content is never shown. visitNum covers same-directory retries where stagePath
+  // stays the same but we still want a fresh fetch.
   useEffect(() => {
     setResponseContent(null);
     setPromptContent(null);
     setTurnsData(null);
     setLoading(false);
     setShowOtherVisits(false);
-  }, [stagePath]);
+  }, [stagePath, visitNum]);
 
   // While the node is running, re-fetch the active tab's content in-place every few seconds.
   useEffect(() => {
@@ -338,6 +340,15 @@ function LLMNodeContent({
 
   return (
     <>
+      {/* Note: attractor overwrites the stage directory on each retry within the same
+          restart level, so visits that share a stagePath always show the latest attempt's
+          files. We surface this honestly when other visits share our path. */}
+      {otherVisits.some((v) => v.stagePath === stagePath) && (
+        <div className="px-3 py-1 text-[10px] text-amber-400/50 bg-amber-900/10 border-b border-gray-800 shrink-0">
+          Files are overwritten per retry — showing the most recent attempt's output for this run level
+        </div>
+      )}
+
       {/* Tab bar with visit badge */}
       <div className="flex items-center border-b border-gray-800 shrink-0 overflow-x-auto">
         {visibleTabs.map(({ id, label }) => (
@@ -790,13 +801,15 @@ export function StageDetailPanel({
   // DOT attribute parsing for this node
   const dotAttrs = useMemo(() => parseNodeDotAttrs(dot ?? "", nodeId), [dot, nodeId]);
 
-  // Stage file metadata
+  // Stage file metadata — refetch whenever stagePath or visitNum changes.
+  // visitNum covers same-directory retries (attractor overwrites the dir, so latest
+  // attempt's files are what we get; refetching ensures we see the freshest listing).
   const [stageFiles, setStageFiles] = useState<StageFiles>(EMPTY_STAGE_FILES);
   useEffect(() => {
     if (!stagePath) return;
     setStageFiles(EMPTY_STAGE_FILES);
     fetchStageFiles(run.id, stagePath).then(setStageFiles);
-  }, [run.id, stagePath]);
+  }, [run.id, stagePath, visitNum]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // While the node is running, re-poll the file listing so new files become visible.
   const isRunning = visit?.status === "running";

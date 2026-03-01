@@ -873,7 +873,7 @@ export function StageDetailPanel({
       </div>
 
       {/* ── Node-type-specific body ── */}
-      {nodeKind === "llm" && (
+      {nodeKind === "llm" && isLatestVisit && (
         <LLMNodeContent
           run={run}
           stagePath={stagePath}
@@ -884,6 +884,17 @@ export function StageDetailPanel({
           totalVisits={visitsForNode.length}
           otherVisits={otherVisitsForLLM}
         />
+      )}
+      {nodeKind === "llm" && !isLatestVisit && otherVisitsForLLM.length > 0 && (
+        <div className="flex-1 overflow-auto min-h-0">
+          <div className="px-3 pt-2 pb-1 text-[10px] text-gray-600 uppercase tracking-wide font-medium">
+            Other visits
+          </div>
+          {/* Show the latest visit first so it's easy to jump to */}
+          {[...otherVisitsForLLM].reverse().map(({ visit: v, visitNum: vn, stagePath: sp }) => (
+            <PreviousVisitItem key={sp + vn} visit={v} visitNum={vn} />
+          ))}
+        </div>
       )}
 
       {nodeKind === "tool" && (

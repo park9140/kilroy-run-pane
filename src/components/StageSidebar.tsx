@@ -40,9 +40,10 @@ interface StageSidebarProps {
   onHoverVisit: (historyIndex: number | null) => void;
   restartCount?: number;
   restartKinds?: Record<number, "loop" | "process">;
+  nodeLabels?: Map<string, string>;
 }
 
-export function StageSidebar({ run, stageHistory, selectedHistoryIndex, onSelectVisit, onHoverVisit, restartCount, restartKinds }: StageSidebarProps) {
+export function StageSidebar({ run, stageHistory, selectedHistoryIndex, onSelectVisit, onHoverVisit, restartCount, restartKinds, nodeLabels }: StageSidebarProps) {
   const selectedNodeId = selectedHistoryIndex != null ? stageHistory?.[selectedHistoryIndex]?.node_id : undefined;
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -199,7 +200,7 @@ export function StageSidebar({ run, stageHistory, selectedHistoryIndex, onSelect
                   <div className="min-w-0 flex-1">
                     <div className="flex items-baseline justify-between gap-1">
                       <span className={`font-mono truncate ${isChild ? "text-[10px] text-gray-400" : "text-xs text-gray-300"}`}>
-                        {visit.node_id}
+                        {nodeLabels?.get(visit.node_id) ?? visit.node_id}
                       </span>
                       <span className="text-[10px] text-gray-500 shrink-0 tabular-nums">
                         {isRunning

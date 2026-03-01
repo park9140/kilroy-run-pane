@@ -181,8 +181,9 @@ const CLICK_THRESHOLD_PX = 5;
 
 const TRAVERSED_EDGE_COLOR = "#38bdf8"; // sky-400
 const GLOW_FILTERS = `
-  <filter id="glow-selected" x="-50%" y="-50%" width="200%" height="200%">
-    <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="#60a5fa" flood-opacity="1"/>
+  <filter id="glow-selected" x="-60%" y="-60%" width="220%" height="220%">
+    <feDropShadow dx="0" dy="0" stdDeviation="8" flood-color="#60a5fa" flood-opacity="1"/>
+    <feDropShadow dx="0" dy="0" stdDeviation="3" flood-color="#93c5fd" flood-opacity="0.8"/>
   </filter>
   <filter id="glow-active" x="-50%" y="-50%" width="200%" height="200%">
     <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="#f59e0b" flood-opacity="1"/>
@@ -535,9 +536,11 @@ export function DotPreview({
 
       if (!count && !isFuture) return;
 
-      // Cycle edges: both endpoints are in the cycle node set
+      // Cycle edges: both endpoints are in the cycle node set.
+      // Suppress cycle edge color if either endpoint is currently selected (selected glow takes priority).
       const [src, dst] = normalized.split("->", 2);
-      const isCycleEdge = !isFuture && cycleSet.size > 0 && cycleSet.has(src) && cycleSet.has(dst);
+      const isCycleEdge = !isFuture && cycleSet.size > 0 && cycleSet.has(src) && cycleSet.has(dst)
+        && src !== selectedNode && dst !== selectedNode;
       const color = isFuture ? FUTURE_EDGE_COLOR : isCycleEdge ? CYCLE_EDGE_COLOR : TRAVERSED_EDGE_COLOR;
       const strokeWidth = count > 1 ? 1 + (count - 1) * 0.5 : 1;
 
@@ -593,7 +596,7 @@ export function DotPreview({
         graphGroup.appendChild(group);
       }
     });
-  }, [stageHistory, hoveredHistoryIndex, cycleNodes, cycleResolved, svgVersion]);
+  }, [stageHistory, hoveredHistoryIndex, cycleNodes, cycleResolved, svgVersion, selectedNode]);
 
   // Add per-node visit count badges (shown when a node is visited more than once).
   useEffect(() => {

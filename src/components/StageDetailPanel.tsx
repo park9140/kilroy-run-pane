@@ -11,6 +11,8 @@ interface Props {
   onClose: () => void;
   /** Raw DOT string for parsing node attributes (shape, label, etc.) */
   dot?: string;
+  /** Map of node ID → human-readable label from the DOT graph */
+  nodeLabels?: Map<string, string>;
 }
 
 // ── Utilities ────────────────────────────────────────────────────────────────
@@ -481,7 +483,7 @@ function FanOutNodeContent({
                 </span>
                 {meta?.last_node_id && meta.start_node_id !== meta.last_node_id && (
                   <span className="text-[10px] text-gray-600 shrink-0">
-                    {meta.start_node_id} → {meta.last_node_id}
+                    {nodeLabels?.get(meta.start_node_id ?? "") ?? meta.start_node_id} → {nodeLabels?.get(meta.last_node_id) ?? meta.last_node_id}
                   </span>
                 )}
               </div>
@@ -508,7 +510,7 @@ function FanOutNodeContent({
                           {nodeRunning ? "●" : nodeFailed ? "✗" : nodePassed ? "✓" : "–"}
                         </span>
                         <span className="text-[10px] font-mono text-gray-300 truncate flex-1">
-                          {visit.node_id}
+                          {nodeLabels?.get(visit.node_id) ?? visit.node_id}
                         </span>
                         {visit.duration_s != null && (
                           <span className="text-[10px] text-gray-600 shrink-0 tabular-nums">
@@ -637,7 +639,7 @@ function RoutingNodeContent({
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function StageDetailPanel({
-  run, stageHistory, selectedHistoryIndex, onSelectVisit, onClose, dot,
+  run, stageHistory, selectedHistoryIndex, onSelectVisit, onClose, dot, nodeLabels,
 }: Props) {
   const visit = stageHistory[selectedHistoryIndex];
   const nodeId = visit?.node_id ?? "";
@@ -686,7 +688,7 @@ export function StageDetailPanel({
       {/* ── Header ── */}
       <div className="border-b border-gray-800 px-3 py-2 shrink-0 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
-          <span className="text-xs font-mono text-gray-200 truncate font-medium">{nodeId}</span>
+          <span className="text-xs font-mono text-gray-200 truncate font-medium">{nodeLabels?.get(nodeId) ?? nodeId}</span>
           <StatusBadge status={visit.status} />
           <span className="text-[10px] text-gray-600 shrink-0">{kindChip[nodeKind]}</span>
         </div>

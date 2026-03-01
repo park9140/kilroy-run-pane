@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useParams } from "react-router-dom";
 import { useRunMonitor } from "../hooks/useRunMonitor";
 import { DotPreview } from "./DotPreview";
@@ -6,6 +6,7 @@ import { StageSidebar } from "./StageSidebar";
 import { StageDetailPanel } from "./StageDetailPanel";
 import { WorkspacePanel } from "./WorkspacePanel";
 import type { ComputedStatus } from "../lib/types";
+import { parseAllNodeLabels } from "../lib/dotUtils";
 
 function StatusBadge({ status }: { status: ComputedStatus | undefined }) {
   if (!status) return null;
@@ -46,8 +47,13 @@ export function KilroyRunViewer() {
   const userClosedRef = useRef(false);
   // Workspace file browser toggle
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  // Cycle steps menu toggle
+  const [cycleMenuOpen, setCycleMenuOpen] = useState(false);
 
   const run = runState?.run;
+
+  // Map node IDs → human-readable labels from the DOT graph
+  const nodeLabels = useMemo(() => parseAllNodeLabels(dot ?? ""), [dot]);
 
   // Auto-open the detail panel on the last failed step when a run ends in failure.
   const computedStatus = runState?.computedStatus;
@@ -192,22 +198,77 @@ export function KilroyRunViewer() {
         </div>
       </div>
       {/* Cycle banner — yellow at n-1 warning, orange after failure */}
-      {cycleVisible && (
-        <div className={`flex items-center gap-2 px-4 py-1.5 border-b shrink-0 ${
-          runFailed
-            ? "border-orange-800/40 bg-orange-950/40"
-            : "border-yellow-800/40 bg-yellow-950/30"
-        }`}>
-          <span className={`text-xs font-semibold ${runFailed ? "text-orange-400" : "text-yellow-400"}`}>
-            ⟳ Deterministic cycle
-          </span>
-          <span className={runFailed ? "text-orange-700" : "text-yellow-700"}>·</span>
-          <span className={`text-xs font-mono truncate ${runFailed ? "text-orange-500/90" : "text-yellow-500/90"}`} title={cycleInfo.signature}>
-            {cycleInfo.signature}
-          </span>
-          <span className={`ml-auto text-xs shrink-0 ${runFailed ? "text-orange-600" : "text-yellow-600"}`}>
-            repeated {cycleInfo.signatureCount}/{cycleInfo.signatureLimit}×
-          </span>
+      {cycleVisible && cycleInfo && (
+        <div className="shrink-0">
+          {/* Banner row */}
+          <div className={`flex items-center gap-2 px-4 py-1.5 border-b ${
+            runFailed ? "border-orange-800/40 bg-orange-950/40" : "border-yellow-800/40 bg-yellow-950/30"
+          }`}>
+            <span className={`text-xs font-semibold shrink-0 ${runFailed ? "text-orange-400" : "text-yellow-400"}`}>
+              ⟳ Deterministic cycle
+            </span>
+            <span className={runFailed ? "text-orange-700" : "text-yellow-700"}>·</span>
+            <span className={`text-xs font-mono truncate min-w-0 ${runFailed ? "text-orange-500/90" : "text-yellow-500/90"}`} title={cycleInfo.signature}>
+              {cycleInfo.signature}
+            </span>
+            <span className={`ml-auto text-xs shrink-0 tabular-nums ${runFailed ? "text-orange-600" : "text-yellow-600"}`}>
+              repeated {cycleInfo.signatureCount}/{cycleInfo.signatureLimit}×
+            </span>
+            {cycleNodes && cycleNodes.length > 0 && (
+              <button
+                onClick={() => setCycleMenuOpen((v) => !v)}
+                className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded border transition-colors ${
+                  cycleMenuOpen
+                    ? runFailed ? "border-orange-600/60 bg-orange-900/40 text-orange-300" : "border-yellow-600/60 bg-yellow-900/40 text-yellow-300"
+                    : runFailed ? "border-orange-800/40 text-orange-600 hover:text-orange-400 hover:border-orange-600/40" : "border-yellow-800/40 text-yellow-600 hover:text-yellow-400 hover:border-yellow-600/40"
+                }`}
+              >
+                {cycleMenuOpen ? "▴" : "▾"} {cycleNodes.length} steps
+              </button>
+            )}
+          </div>
+
+          {/* Expanded step list */}
+          {cycleMenuOpen && cycleNodes && cycleNodes.length > 0 && (
+            <div className={`border-b ${runFailed ? "border-orange-800/20 bg-orange-950/20" : "border-yellow-800/20 bg-yellow-950/10"}`}>
+              {cycleNodes.map((nodeId) => {
+                // Most recent non-branch visit to this node
+                let lastIndex = -1;
+                stageHistory.forEach((v, i) => { if (v.node_id === nodeId && !v.fan_out_node) lastIndex = i; });
+                if (lastIndex === -1) return null;
+                const visit = stageHistory[lastIndex];
+                const isFailing = nodeId === cycleInfo.failingNodeId;
+                const icon = visit.status === "pass" ? "✓" : visit.status === "fail" ? "✗" : "●";
+                const iconCls = visit.status === "pass" ? "text-green-400" : visit.status === "fail" ? "text-red-400" : "text-amber-400 animate-pulse";
+                const dur = visit.duration_s != null
+                  ? (visit.duration_s < 60 ? `${visit.duration_s}s` : `${Math.floor(visit.duration_s / 60)}m ${visit.duration_s % 60}s`)
+                  : "";
+                return (
+                  <button
+                    key={nodeId}
+                    onClick={() => { userClosedRef.current = false; setPendingNodeId(null); setSelectedHistoryIndex(lastIndex); }}
+                    className={`w-full text-left flex items-start gap-2 px-4 py-1 hover:bg-white/5 transition-colors ${isFailing ? "bg-red-950/20" : ""}`}
+                  >
+                    <span className={`text-xs mt-0.5 shrink-0 w-3 text-center ${iconCls}`}>{icon}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-baseline gap-2">
+                        <span className={`text-xs font-mono truncate ${isFailing ? (runFailed ? "text-orange-300" : "text-yellow-300") : "text-gray-300"}`}>
+                          {nodeLabels.get(nodeId) ?? nodeId}
+                        </span>
+                        {isFailing && (
+                          <span className={`text-[9px] shrink-0 ${runFailed ? "text-orange-600" : "text-yellow-600"}`}>← failing</span>
+                        )}
+                        {dur && <span className="ml-auto text-[10px] text-gray-600 tabular-nums shrink-0">{dur}</span>}
+                      </div>
+                      {visit.failure_reason && (
+                        <div className="text-[10px] text-red-400/60 truncate">{visit.failure_reason}</div>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -224,6 +285,7 @@ export function KilroyRunViewer() {
             onHoverVisit={setHoveredHistoryIndex}
             restartCount={runState?.restartCount}
             restartKinds={runState?.restartKinds}
+            nodeLabels={nodeLabels}
           />
         )}
 
@@ -274,12 +336,13 @@ export function KilroyRunViewer() {
               onSelectVisit={(idx) => { userClosedRef.current = false; setSelectedHistoryIndex(idx); setPendingNodeId(null); }}
               onClose={() => { userClosedRef.current = true; setSelectedHistoryIndex(null); setPendingNodeId(null); }}
               dot={dot}
+              nodeLabels={nodeLabels}
             />
           )}
           {pendingNodeId && selectedHistoryIndex == null && (
             <div className="w-96 h-full border-l border-gray-800 flex flex-col shrink-0 bg-gray-900/30">
               <div className="border-b border-gray-800 px-3 py-2 shrink-0 flex items-center justify-between gap-2">
-                <span className="text-xs font-mono text-gray-200 truncate font-medium">{pendingNodeId}</span>
+                <span className="text-xs font-mono text-gray-200 truncate font-medium">{nodeLabels.get(pendingNodeId) ?? pendingNodeId}</span>
                 <button
                   onClick={() => { userClosedRef.current = true; setPendingNodeId(null); }}
                   className="text-gray-500 hover:text-gray-200 text-xs px-2 py-1 rounded hover:bg-gray-800 shrink-0"

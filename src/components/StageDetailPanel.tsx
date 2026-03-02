@@ -265,12 +265,21 @@ function LLMNodeContent({
     return () => clearInterval(id);
   }, [isRunning, tab, stageFiles, run.id, stagePath]);
 
-  // Default to first available tab when stageFiles loads
+  // Set default tab when stageFiles loads — preserve current tab if it's still available,
+  // only fall back to first available when it's not (e.g. switching to a visit that has
+  // no "turns" tab, or first mount where tab defaults to "response").
   useEffect(() => {
-    if (stageFiles.hasResponse) setTab("response");
-    else if (stageFiles.hasTurns) setTab("turns");
-    else setTab("prompt");
-  }, [stageFiles.hasResponse, stageFiles.hasTurns]);
+    const isAvailable =
+      (tab === "response" && stageFiles.hasResponse) ||
+      (tab === "turns"    && stageFiles.hasTurns)    ||
+      (tab === "prompt"   && stageFiles.hasPrompt);
+    if (!isAvailable) {
+      if (stageFiles.hasResponse) setTab("response");
+      else if (stageFiles.hasTurns) setTab("turns");
+      else setTab("prompt");
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stageFiles.hasResponse, stageFiles.hasTurns, stageFiles.hasPrompt]);
 
   useEffect(() => {
     if (tab === "response" && stageFiles.hasResponse && responseContent === null) {
@@ -278,6 +287,12 @@ function LLMNodeContent({
       fetchFileContent(run.id, stagePath, "response.md")
         .then(setResponseContent).catch(() => setResponseContent("(failed to load)"))
         .finally(() => setLoading(false));
+    }
+    // Also load turns when on Response tab: the turns endpoint extracts response_text
+    // (e.g. agent_message for Codex format) which we prefer over raw response.md content.
+    if (tab === "response" && stageFiles.hasTurns && turnsData === null) {
+      fetchTurns(run.id, stagePath)
+        .then(setTurnsData).catch(() => setTurnsData({ turns: [] }));
     }
     if (tab === "turns" && stageFiles.hasTurns && turnsData === null) {
       setLoading(true);
@@ -336,8 +351,12 @@ function LLMNodeContent({
       <div className="flex-1 overflow-auto min-h-0">
         {tab === "response" && (
           <div className="p-3">
-            {loading && responseContent === null ? (
+            {/* Wait for turns when hasTurns — they may carry a cleaner response_text
+                (e.g. Codex agent_message) that replaces raw response.md content. */}
+            {(loading && responseContent === null) || (stageFiles.hasTurns && turnsData === null) ? (
               <div className="text-xs text-gray-500">Loading…</div>
+            ) : turnsData?.response_text ? (
+              <FileVisualizer fileName="response.md" mime="text/markdown" content={turnsData.response_text} />
             ) : responseContent !== null ? (
               <FileVisualizer fileName="response.md" mime="text/markdown" content={responseContent} />
             ) : (

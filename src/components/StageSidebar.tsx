@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { RunRecord, StageInfo, VisitedStage } from "../lib/types";
+import { useResizablePanel, resizeHandleClass } from "../hooks/useResizablePanel";
 
 function fmtDuration(s: number): string {
   if (s < 60) return `${s}s`;
@@ -44,6 +45,7 @@ interface StageSidebarProps {
 }
 
 export function StageSidebar({ run, stageHistory, selectedHistoryIndex, onSelectVisit, onHoverVisit, restartCount, restartKinds, nodeLabels }: StageSidebarProps) {
+  const { width, onMouseDown } = useResizablePanel({ edge: "right", initialWidth: 224, minWidth: 160, maxWidth: 480, storageKey: "kilroy-sidebar-w" });
   const selectedNodeId = selectedHistoryIndex != null ? stageHistory?.[selectedHistoryIndex]?.node_id : undefined;
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -71,7 +73,7 @@ export function StageSidebar({ run, stageHistory, selectedHistoryIndex, onSelect
   }
 
   return (
-    <div className="w-56 h-full border-r border-gray-800 flex flex-col shrink-0 overflow-hidden">
+    <div className="h-full border-r border-gray-800 flex flex-col shrink-0 overflow-hidden relative" style={{ width }}>
       {/* Run Info */}
       <div className="border-b border-gray-800 p-3 shrink-0">
         <h3 className="text-xs font-medium text-gray-400 mb-2 uppercase tracking-wider">Run Info</h3>
@@ -228,6 +230,8 @@ export function StageSidebar({ run, stageHistory, selectedHistoryIndex, onSelect
           </div>
         )}
       </div>
+      {/* Resize handle */}
+      <div className={resizeHandleClass("right")} onMouseDown={onMouseDown} />
     </div>
   );
 }

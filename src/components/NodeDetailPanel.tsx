@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { parseNodeAttrs } from "../lib/dotUtils";
+import { useResizablePanel, resizeHandleClass } from "../hooks/useResizablePanel";
 
 interface NodeDetailPanelProps {
   nodeId: string;
@@ -26,6 +27,7 @@ export function NodeDetailPanel({
   saving = false,
   dirty = false,
 }: NodeDetailPanelProps) {
+  const { width, onMouseDown } = useResizablePanel({ edge: "left", initialWidth: 384, minWidth: 280, maxWidth: 800, storageKey: "kilroy-nodedetail-w" });
   const attrs = useMemo(() => parseNodeAttrs(dot, nodeId), [dot, nodeId]);
   const isTool = attrs.shape === "parallelogram";
   const isLLM = !isTool && (attrs.shape === "box" || (!attrs.shape && (attrs.prompt != null || attrs.systemPrompt != null)));
@@ -56,7 +58,7 @@ export function NodeDetailPanel({
   };
 
   return (
-    <div className="w-96 h-full border-l border-gray-800 flex flex-col shrink-0 bg-gray-900/30">
+    <div className="h-full border-l border-gray-800 flex flex-col shrink-0 bg-gray-900/30 relative" style={{ width }}>
       {/* Header */}
       <div className="border-b border-gray-800 px-3 py-2 shrink-0 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
@@ -120,6 +122,8 @@ export function NodeDetailPanel({
           </div>
         )}
       </div>
+      {/* Resize handle */}
+      <div className={resizeHandleClass("left")} onMouseDown={onMouseDown} />
     </div>
   );
 }

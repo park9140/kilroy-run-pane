@@ -4,6 +4,7 @@ import type { RunRecord, VisitedStage, TurnsData } from "../lib/types";
 import { FileVisualizer } from "./FileVisualizers";
 import { TurnViewer } from "./TurnViewer";
 import { WorkspacePanel } from "./WorkspacePanel";
+import { useResizablePanel, resizeHandleClass } from "../hooks/useResizablePanel";
 
 interface Props {
   run: RunRecord;
@@ -779,6 +780,7 @@ function RoutingNodeContent({
 export function StageDetailPanel({
   run, stageHistory, selectedHistoryIndex, onSelectVisit, onClose, dot, nodeLabels,
 }: Props) {
+  const { width, onMouseDown } = useResizablePanel({ edge: "left", initialWidth: 384, minWidth: 280, maxWidth: 800, storageKey: "kilroy-detail-w" });
   const visit = stageHistory[selectedHistoryIndex];
   const nodeId = visit?.node_id ?? "";
   const stagePath = visit?.stage_path ?? nodeId;
@@ -859,7 +861,7 @@ export function StageDetailPanel({
   };
 
   return (
-    <div className="w-96 h-full border-l border-gray-800 flex flex-col shrink-0 overflow-hidden bg-gray-900/30">
+    <div className="h-full border-l border-gray-800 flex flex-col shrink-0 overflow-hidden bg-gray-900/30 relative" style={{ width }}>
 
       {/* ── Header ── */}
       <div className="border-b border-gray-800 px-3 py-2 shrink-0 flex items-center justify-between gap-2">
@@ -994,6 +996,8 @@ export function StageDetailPanel({
           nextNodeId={stageHistory[selectedHistoryIndex + 1]?.node_id}
         />
       )}
+      {/* Resize handle */}
+      <div className={resizeHandleClass("left")} onMouseDown={onMouseDown} />
     </div>
   );
 }

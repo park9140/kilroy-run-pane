@@ -408,8 +408,11 @@ export function WorkspacePanel({ runId, isExecuting, onClose, selectedVisit, sta
 
   // ── Commit tracking ────────────────────────────────────────────────────────
   const [commits, setCommits] = useState<CommitInfo[]>([]);
-  // pinnedRef: the git SHA for the selected node's commit (null = show HEAD/live state)
+  // pinnedRef: ref used for file tree and content (for branch visits = fan_out_sha^,
+  //            so the tree shows the code that was being processed, not the empty fan_out commit)
   const [pinnedRef, setPinnedRef] = useState<string | null>(null);
+  // pinnedDiffRef: ref used for the commit-diff (always the fan_out/node SHA itself)
+  const [pinnedDiffRef, setPinnedDiffRef] = useState<string | null>(null);
   const [pinnedLabel, setPinnedLabel] = useState<string | null>(null);
 
   // Fetch all run-scoped commits once
@@ -424,6 +427,7 @@ export function WorkspacePanel({ runId, isExecuting, onClose, selectedVisit, sta
   useEffect(() => {
     if (!selectedVisit || !commits.length || !stageHistory) {
       setPinnedRef(null);
+      setPinnedDiffRef(null);
       setPinnedLabel(null);
       return;
     }
@@ -438,10 +442,17 @@ export function WorkspacePanel({ runId, isExecuting, onClose, selectedVisit, sta
     const nodeCommits = commits.filter((c) => c.node_id === effectiveNodeId);
     const commit = nodeCommits[visitNum - 1];
     if (commit) {
-      setPinnedRef(commit.sha);
-      setPinnedLabel(`${commit.sha.slice(0, 7)} ${effectiveNodeId}`);
+      const isBranch = !!selectedVisit.fan_out_node;
+      // For branch visits: file tree at fan_out^  (code being processed when branch ran)
+      // For main visits:   file tree at the commit itself
+      setPinnedRef(isBranch ? `${commit.sha}^` : commit.sha);
+      // Diff always shows what the commit itself introduced
+      setPinnedDiffRef(commit.sha);
+      // Label uses the actual selected node_id, not the fan_out parent
+      setPinnedLabel(`${commit.sha.slice(0, 7)} ${selectedVisit.node_id}`);
     } else {
       setPinnedRef(null);
+      setPinnedDiffRef(null);
       setPinnedLabel(null);
     }
   }, [selectedVisit, commits, stageHistory]);
@@ -533,13 +544,13 @@ export function WorkspacePanel({ runId, isExecuting, onClose, selectedVisit, sta
     } catch { /* ignore */ }
   }, [runId]);
 
-  // Fetch diff whenever pinnedRef changes, and auto-refresh while executing in live mode
+  // Fetch diff whenever pinnedDiffRef changes, and auto-refresh while executing in live mode
   useEffect(() => {
-    fetchDiff(pinnedRef);
-    if (pinnedRef || !isExecuting) return; // pinned = immutable; stop polling
+    fetchDiff(pinnedDiffRef);
+    if (pinnedDiffRef || !isExecuting) return; // pinned = immutable; stop polling
     const id = setInterval(() => fetchDiff(null), 4000);
     return () => clearInterval(id);
-  }, [fetchDiff, isExecuting, pinnedRef]);
+  }, [fetchDiff, isExecuting, pinnedDiffRef]);
 
   // Auto-expand directories that contain changed files
   useEffect(() => {
@@ -558,13 +569,13 @@ export function WorkspacePanel({ runId, isExecuting, onClose, selectedVisit, sta
 
   // When pinned to a commit and its diff loads, auto-select the first changed file
   useEffect(() => {
-    if (!pinnedRef || fileDiffs.size === 0) return;
+    if (!pinnedDiffRef || fileDiffs.size === 0) return;
     const firstChanged = [...fileDiffs.keys()][0];
     if (firstChanged) {
       setSelectedPath(firstChanged);
       setFileViewMode("diff");
     }
-  }, [pinnedRef, fileDiffs.size]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pinnedDiffRef, fileDiffs.size]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Switch to diff view automatically when selecting a changed file (also reacts to fileDiffs loading)
   useEffect(() => {

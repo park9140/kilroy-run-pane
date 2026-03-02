@@ -277,7 +277,10 @@ function LLMNodeContent({
   // Set default tab when stageFiles loads — preserve current tab if it's still available,
   // only fall back to first available when it's not (e.g. switching to a visit that has
   // no "turns" tab, or first mount where tab defaults to "response").
+  // Guard: skip while stageFiles is in the "not yet loaded" empty state (all false) so we
+  // don't clobber the current tab during the brief reset between node switches.
   useEffect(() => {
+    if (!stageFiles.hasResponse && !stageFiles.hasTurns && !stageFiles.hasPrompt) return;
     const isAvailable =
       (tab === "response" && stageFiles.hasResponse) ||
       (tab === "turns"    && stageFiles.hasTurns)    ||
@@ -784,11 +787,15 @@ export function StageDetailPanel({
     [visitsForNode, selectedHistoryIndex, nodeId], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
-  // For non-latest visits, read from the archived visit subdir (e.g. implement/visit_1/).
+  // For non-latest visits of main nodes, read from the archived visit subdir (e.g. implement/visit_1/).
   // The attractor archives each visit as visit_1/, visit_2/, … and the latest visit's
   // files live directly in the node directory.  visitNum is the 1-based index among all
   // visits to this node in stageHistory.
-  const effectiveStagePath = isLatestVisit
+  //
+  // Branch nodes (fan_out_node != null) already get a distinct stage_path per pass
+  // (e.g. parallel/fan_out/pass1/node vs pass2/node) — no visit_N subdirectory exists.
+  const isBranchVisit = visit?.fan_out_node != null;
+  const effectiveStagePath = (isLatestVisit || isBranchVisit)
     ? stagePath
     : `${stagePath}/visit_${visitNum}`;
 

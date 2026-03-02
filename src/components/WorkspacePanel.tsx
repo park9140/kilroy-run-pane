@@ -556,10 +556,20 @@ export function WorkspacePanel({ runId, isExecuting, onClose, selectedVisit, sta
     });
   }, [fileDiffs]);
 
-  // Switch to diff view automatically when selecting a changed file
+  // When pinned to a commit and its diff loads, auto-select the first changed file
+  useEffect(() => {
+    if (!pinnedRef || fileDiffs.size === 0) return;
+    const firstChanged = [...fileDiffs.keys()][0];
+    if (firstChanged) {
+      setSelectedPath(firstChanged);
+      setFileViewMode("diff");
+    }
+  }, [pinnedRef, fileDiffs.size]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Switch to diff view automatically when selecting a changed file (also reacts to fileDiffs loading)
   useEffect(() => {
     setFileViewMode(selectedPath && fileDiffs.has(selectedPath) ? "diff" : "raw");
-  }, [selectedPath]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedPath, fileDiffs]);
 
   const handleReveal = () => {
     fetch(`/api/runs/${runId}/workspace/reveal`, { method: "POST" }).catch(() => {});

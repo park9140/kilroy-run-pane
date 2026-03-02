@@ -158,6 +158,11 @@ function buildNodeModelData(dot: string): {
     // Get class
     const nodeClass = /class\s*=\s*["]?([^"',\]\s]+)["]?/.exec(attrs)?.[1] ?? null;
     const rule = resolve(nodeId, nodeClass);
+    // Direct node-level attributes override stylesheet (e.g. llm_model="gemini-3-flash-preview")
+    const nodeModel    = /llm_model\s*=\s*"([^"]+)"/.exec(attrs)?.[1];
+    const nodeProvider = /llm_provider\s*=\s*"([^"]+)"/.exec(attrs)?.[1];
+    if (nodeModel)    rule.model    = nodeModel;
+    if (nodeProvider) rule.provider = nodeProvider;
     if (!rule.model && !rule.provider) continue;
     const key = `${rule.provider ?? ""}/${rule.model ?? ""}`;
     if (!keyToColorIdx.has(key)) keyToColorIdx.set(key, nextIdx++ % MODEL_PALETTE.length);

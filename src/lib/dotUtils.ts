@@ -56,6 +56,53 @@ export function parseNodeAttrs(dot: string, nodeId: string): NodeAttrs {
 }
 
 /**
+ * Escape a string value for use inside a DOT double-quoted attribute.
+ */
+export function dotEscape(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n");
+}
+
+/**
+ * Update (or insert) a single attribute on a named node in a DOT string.
+ * Returns the modified DOT string. Preserves file structure as much as possible.
+ */
+export function updateNodeAttr(dot: string, nodeId: string, attrName: string, newValue: string): string {
+  // Find the node's attribute block:  nodeId [....]
+  const nodeRe = new RegExp(`(\\b${nodeId}\\s*\\[)([^\\]]{0,20000})(\\])`, "s");
+  const nodeMatch = nodeRe.exec(dot);
+  if (!nodeMatch) return dot;
+
+  const prefix = nodeMatch[1]; // "nodeId ["
+  let block = nodeMatch[2];     // everything inside [...]
+  const suffix = nodeMatch[3];  // "]"
+
+  const escaped = dotEscape(newValue);
+
+  // Try to find and replace an existing quoted attribute
+  const qRe = new RegExp(`(\\b${attrName}\\s*=\\s*")(?:[^"\\\\]|\\\\.)*(")`,"s");
+  if (qRe.test(block)) {
+    block = block.replace(qRe, `$1${escaped}$2`);
+  } else {
+    // Try unquoted
+    const uRe = new RegExp(`(\\b${attrName}\\s*=\\s*)([^\\s,\\]]+)`);
+    if (uRe.test(block)) {
+      block = block.replace(uRe, `$1"${escaped}"`);
+    } else {
+      // Attribute doesn't exist — insert before closing ]
+      const sep = block.trimEnd().endsWith(",") || block.trim() === "" ? " " : ", ";
+      block = block.trimEnd() + `${sep}${attrName}="${escaped}"`;
+    }
+  }
+
+  const start = nodeMatch.index;
+  const end = start + nodeMatch[0].length;
+  return dot.slice(0, start) + prefix + block + suffix + dot.slice(end);
+}
+
+/**
  * Parse every node's label attribute from a DOT graph string.
  * Returns a Map<nodeId, label>. Nodes without an explicit label are omitted
  * (the caller should fall back to the node ID itself).

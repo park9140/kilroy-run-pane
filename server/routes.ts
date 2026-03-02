@@ -259,7 +259,7 @@ export function registerRoutes(
     if (!worktreePath) { res.status(404).json({ error: "no worktree" }); return; }
     const { execFile } = await import("node:child_process");
     execFile(
-      "git", ["log", "--pretty=format:%H %s", "HEAD"],
+      "git", ["log", "--all", "--topo-order", "--pretty=format:%H %s"],
       { cwd: worktreePath, maxBuffer: 2 * 1024 * 1024 },
       (err, stdout) => {
         if (err && !stdout) { res.status(500).json({ error: String(err) }); return; }
@@ -279,6 +279,31 @@ export function registerRoutes(
         }
         commits.reverse(); // oldest-first
         res.json(commits);
+      }
+    );
+  });
+
+  // Workspace: list parallel branch refs and their tip SHAs for this run
+  app.get("/api/runs/:id/workspace/branches", async (req: Request, res: Response) => {
+    const id = String(req.params["id"] ?? "");
+    const state = watcher.getState(id) ?? await watcher.readOnce(id);
+    const worktreePath = state?.worktreePath;
+    if (!worktreePath) { res.status(404).json({ error: "no worktree" }); return; }
+    const { execFile } = await import("node:child_process");
+    const prefix = `refs/heads/attractor/run/parallel/${id}/`;
+    execFile(
+      "git", ["for-each-ref", "--format=%(refname:short) %(objectname)", prefix],
+      { cwd: worktreePath, maxBuffer: 2 * 1024 * 1024 },
+      (err, stdout) => {
+        if (err && !stdout) { res.status(500).json({ error: String(err) }); return; }
+        const branches: { name: string; sha: string }[] = [];
+        for (const line of stdout.split("\n")) {
+          if (!line.trim()) continue;
+          const spaceIdx = line.lastIndexOf(" ");
+          if (spaceIdx < 0) continue;
+          branches.push({ name: line.slice(0, spaceIdx), sha: line.slice(spaceIdx + 1) });
+        }
+        res.json(branches);
       }
     );
   });
@@ -428,20 +453,26 @@ export function registerRoutes(
   });
 
   // Workspace: diff introduced by a specific commit (git diff PARENT..SHA)
+  // Optional ?from=<sha> for range diffs (git diff FROM..REF) instead of single-commit diffs.
   app.get("/api/runs/:id/workspace/commit-diff", async (req: Request, res: Response) => {
     const id = String(req.params["id"] ?? "");
     const ref = String(req.query["ref"] ?? "");
+    const from = String(req.query["from"] ?? "");
     if (!ref || !/^[0-9a-f]{6,40}$/i.test(ref)) { res.status(400).json({ error: "invalid ref" }); return; }
+    if (from && !/^[0-9a-f]{6,40}$/i.test(from)) { res.status(400).json({ error: "invalid from" }); return; }
     const state = watcher.getState(id) ?? await watcher.readOnce(id);
     const worktreePath = state?.worktreePath;
     if (!worktreePath) { res.status(404).json({ error: "no worktree" }); return; }
     const { execFile } = await import("node:child_process");
-    // git diff PARENT..SHA; fall back to git show --format="" for root commit (no parent)
+    // When from is provided: git diff FROM..REF (range diff for branch work)
+    // Otherwise: git diff PARENT..SHA; fall back to git show --format="" for root commit
+    const diffRange = from ? `${from}..${ref}` : `${ref}^..${ref}`;
     execFile(
-      "git", ["diff", `${ref}^..${ref}`],
+      "git", ["diff", diffRange],
       { cwd: worktreePath, maxBuffer: 10 * 1024 * 1024 },
       (err, stdout, stderr) => {
         if (err && !stdout) {
+          if (from) { res.status(500).json({ error: String(stderr) || String(err) }); return; }
           execFile(
             "git", ["show", "--format=", ref],
             { cwd: worktreePath, maxBuffer: 10 * 1024 * 1024 },
@@ -475,6 +506,22 @@ export function registerRoutes(
       if (err) { res.status(500).json({ error: String(err) }); return; }
       res.json({ ok: true });
     });
+  });
+
+  // Read a local .dot/.gv file by absolute path (used for VS Code drag-and-drop)
+  app.get("/api/local-file", async (req: Request, res: Response) => {
+    const filePath = String(req.query["path"] ?? "");
+    if (!filePath || filePath.includes("..")) { res.status(400).json({ error: "invalid path" }); return; }
+    if (!filePath.endsWith(".dot") && !filePath.endsWith(".gv")) {
+      res.status(400).json({ error: "only .dot/.gv files supported" }); return;
+    }
+    try {
+      const content = await readFile(filePath, "utf8");
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.send(content);
+    } catch {
+      res.status(404).json({ error: "file not found" });
+    }
   });
 
   // Serve SPA for /run/* routes (must come after API routes)

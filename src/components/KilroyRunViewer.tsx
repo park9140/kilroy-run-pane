@@ -4,8 +4,9 @@ import { useRunMonitor } from "../hooks/useRunMonitor";
 import { DotPreview } from "./DotPreview";
 import { StageSidebar } from "./StageSidebar";
 import { StageDetailPanel } from "./StageDetailPanel";
+import { NodeDetailPanel } from "./NodeDetailPanel";
 import type { ComputedStatus } from "../lib/types";
-import { parseAllNodeLabels, parseNodeAttrs } from "../lib/dotUtils";
+import { parseAllNodeLabels } from "../lib/dotUtils";
 
 function StatusBadge({ status }: { status: ComputedStatus | undefined }) {
   if (!status) return null;
@@ -32,103 +33,6 @@ function HeartbeatAge({ lastHeartbeat }: { lastHeartbeat?: string }) {
   if (secs < 0) return null;
   const label = secs < 60 ? `${secs}s ago` : `${Math.floor(secs / 60)}m ago`;
   return <span className="text-[10px] text-gray-500">heartbeat {label}</span>;
-}
-
-function PendingNodePanel({
-  nodeId,
-  nodeLabel,
-  dot,
-  onClose,
-}: {
-  nodeId: string;
-  nodeLabel: string;
-  dot: string;
-  onClose: () => void;
-}) {
-  const attrs = useMemo(() => parseNodeAttrs(dot, nodeId), [dot, nodeId]);
-  const isTool = attrs.shape === "parallelogram";
-  const isLLM = !isTool && (attrs.shape === "box" || (!attrs.shape && (attrs.prompt != null || attrs.systemPrompt != null)));
-
-  const nodeTypeLabel = isTool ? "Tool node" : isLLM ? "LLM node" : attrs.shape ? `${attrs.shape} node` : "Node";
-  const nodeTypeCls = isTool ? "text-cyan-400" : isLLM ? "text-violet-400" : "text-gray-400";
-
-  return (
-    <div className="w-96 h-full border-l border-gray-800 flex flex-col shrink-0 bg-gray-900/30">
-      {/* Header */}
-      <div className="border-b border-gray-800 px-3 py-2 shrink-0 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-xs font-mono text-gray-200 truncate font-medium">{nodeLabel}</span>
-          <span className={`text-[9px] shrink-0 ${nodeTypeCls}`}>{nodeTypeLabel}</span>
-        </div>
-        <button
-          onClick={onClose}
-          className="text-gray-500 hover:text-gray-200 text-xs px-2 py-1 rounded hover:bg-gray-800 shrink-0"
-        >✕</button>
-      </div>
-
-      {/* Not-yet-run badge */}
-      <div className="border-b border-gray-800/60 px-3 py-1.5 shrink-0">
-        <span className="text-[10px] text-gray-600 italic">Not yet executed in this run</span>
-      </div>
-
-      {/* Attributes */}
-      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4 text-xs">
-        {/* System prompt */}
-        {attrs.systemPrompt && (
-          <div className="space-y-1">
-            <div className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">System Prompt</div>
-            <pre className="whitespace-pre-wrap font-mono text-[11px] text-gray-300 bg-gray-900/60 rounded p-2 border border-gray-800 leading-relaxed">
-              {attrs.systemPrompt}
-            </pre>
-          </div>
-        )}
-
-        {/* Prompt */}
-        {attrs.prompt && (
-          <div className="space-y-1">
-            <div className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Prompt</div>
-            <pre className="whitespace-pre-wrap font-mono text-[11px] text-gray-300 bg-gray-900/60 rounded p-2 border border-gray-800 leading-relaxed">
-              {attrs.prompt}
-            </pre>
-          </div>
-        )}
-
-        {/* Tool command */}
-        {attrs.toolCommand && (
-          <div className="space-y-1">
-            <div className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Tool Command</div>
-            <pre className="whitespace-pre-wrap font-mono text-[11px] text-cyan-300/80 bg-gray-900/60 rounded p-2 border border-gray-800 leading-relaxed">
-              {attrs.toolCommand}
-            </pre>
-          </div>
-        )}
-
-        {/* Context filter */}
-        {attrs.contextFilter && (
-          <div className="space-y-1">
-            <div className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Context Filter</div>
-            <code className="font-mono text-[11px] text-amber-300/70">{attrs.contextFilter}</code>
-          </div>
-        )}
-
-        {/* Max retry */}
-        {attrs.maxRetry && (
-          <div className="space-y-1">
-            <div className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Max Retry</div>
-            <code className="font-mono text-[11px] text-gray-400">{attrs.maxRetry}</code>
-          </div>
-        )}
-
-        {/* Fallback when no useful attributes were found */}
-        {!attrs.prompt && !attrs.systemPrompt && !attrs.toolCommand && (
-          <div className="text-center space-y-1 pt-8">
-            <div className="text-xs text-gray-600">No prompt attributes in DOT graph</div>
-            <div className="text-[10px] text-gray-700">Node ID: {nodeId}</div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
 }
 
 export function KilroyRunViewer() {
@@ -490,11 +394,12 @@ export function KilroyRunViewer() {
             />
           )}
           {pendingNodeId && selectedHistoryIndex == null && (
-            <PendingNodePanel
+            <NodeDetailPanel
               nodeId={pendingNodeId}
               nodeLabel={nodeLabels.get(pendingNodeId) ?? pendingNodeId}
               dot={dot ?? ""}
               onClose={() => { userClosedRef.current = true; setPendingNodeId(null); clearSelectionFromUrl(); }}
+              editable={false}
             />
           )}
         </div>

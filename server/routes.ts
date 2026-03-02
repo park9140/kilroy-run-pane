@@ -193,11 +193,16 @@ export function registerRoutes(
       try {
         const raw = await readFile(eventsPath, "utf8");
         const turns = parseEventsTurns(raw);
-        // Attach final response text from response.md when provider doesn't stream text into events
-        try {
-          const responseText = await readFile(join(runDir, node, "response.md"), "utf8");
-          if (responseText.trim()) turns.response_text = responseText;
-        } catch { /* response.md may not exist for tool nodes */ }
+        // Attach final response text from response.md when the parser didn't produce one.
+        // Skip if we already have response_text (e.g. Codex format embeds it in events),
+        // and skip if response.md looks like raw NDJSON (starts with '{').
+        if (!turns.response_text) {
+          try {
+            const responseText = await readFile(join(runDir, node, "response.md"), "utf8");
+            const trimmed = responseText.trim();
+            if (trimmed && !trimmed.startsWith("{")) turns.response_text = trimmed;
+          } catch { /* response.md may not exist for tool nodes */ }
+        }
         // Attach pricing estimate
         turns.pricing = await computePricing(runDir, node, turns);
         res.json(turns);
@@ -423,12 +428,14 @@ function parseEventsTurns(raw: string): TurnsResponse {
     try { events.push(JSON.parse(l)); } catch { /* skip malformed */ }
   }
 
-  // Detect format: Claude Code native format uses `type` field; Kilroy format uses `kind`.
+  // Fingerprint by first event:
+  //   Kilroy format   → { kind: "SESSION_START", ... }
+  //   Claude Code     → { type: "system", ... }
+  //   Codex           → { type: "thread.started", ... }
   const firstEv = events[0];
-  if (firstEv && "type" in firstEv && !("kind" in firstEv)) {
-    return parseClaudeCodeEvents(events);
-  }
-  return parseKilroyEvents(events);
+  if (firstEv?.kind) return parseKilroyEvents(events);
+  if (firstEv?.type === "thread.started") return parseCodexEvents(events);
+  return parseClaudeCodeEvents(events);
 }
 
 // ── Kilroy format parser (kind: SESSION_START / USER_INPUT / TOOL_CALL_* / ASSISTANT_TEXT_END)
@@ -580,6 +587,71 @@ function parseClaudeCodeEvents(
 
   flushAssistant();
   return { session_id, model: model || undefined, turns, response_text };
+}
+
+// ── Codex format parser (type: thread.started / item.started / item.completed / turn.*)
+// Items: reasoning (thinking), command_execution (shell), file_change, agent_message (final text)
+
+function parseCodexEvents(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  events: any[],
+): TurnsResponse {
+  const steps: AssistantStep[] = [];
+  let response_text: string | undefined;
+
+  for (const ev of events) {
+    if (ev.type !== "item.completed") continue;
+    const item = ev.item;
+    if (!item) continue;
+
+    switch (item.type) {
+      case "reasoning":
+        if (item.text) steps.push({ thinking: String(item.text) });
+        break;
+      case "command_execution":
+        steps.push({
+          tool_call: {
+            call_id: String(item.id ?? ""),
+            tool_name: "command_execution",
+            arguments: { command: String(item.command ?? "") },
+            output: String(item.aggregated_output ?? ""),
+            is_error: typeof item.exit_code === "number" && item.exit_code !== 0,
+          },
+        });
+        break;
+      case "file_change": {
+        const changes: Array<{ path?: string; kind?: string }> =
+          Array.isArray(item.changes) ? item.changes : [];
+        const changesText = changes.map((c) => `${c.kind ?? "?"}: ${c.path ?? ""}`).join("\n");
+        steps.push({
+          tool_call: {
+            call_id: String(item.id ?? ""),
+            tool_name: "file_change",
+            arguments: { changes },
+            output: changesText,
+            is_error: false,
+          },
+        });
+        break;
+      }
+      case "agent_message": {
+        // agent_message.text may be JSON: { final: "...", summary: "..." }
+        let text = String(item.text ?? "");
+        try {
+          const parsed = JSON.parse(text) as Record<string, unknown>;
+          if (typeof parsed.final === "string") text = parsed.final;
+        } catch { /* plain text */ }
+        response_text = text;
+        if (text) steps.push({ text });
+        break;
+      }
+    }
+  }
+
+  return {
+    turns: steps.length > 0 ? [{ role: "assistant", steps }] : [],
+    response_text,
+  };
 }
 
 async function computePricing(

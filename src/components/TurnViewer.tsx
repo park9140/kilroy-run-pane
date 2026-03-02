@@ -23,7 +23,10 @@ function outputFileName(toolName: string, args: Record<string, unknown>): string
     case "shell":
     case "bash":
     case "Bash":
+    case "command_execution":
       return "output.log";
+    case "file_change":
+      return "changes.txt";
     default:
       return "output.log";
   }
@@ -79,6 +82,21 @@ function toolLabel(toolName: string, args: Record<string, unknown>): string {
       const desc = String(args.description ?? args.prompt ?? "");
       return desc.length > 60 ? desc.slice(0, 60) + "…" : desc;
     }
+    case "command_execution": {
+      // Strip shell wrapper: /bin/zsh -lc '...' → inner command
+      const raw = String(args.command ?? "");
+      const m = raw.match(/^(?:\/bin\/(?:zsh|bash|sh)\s+-\S+\s+)?'([\s\S]+)'$/);
+      const cmd = m ? m[1] : raw;
+      return cmd.length > 72 ? cmd.slice(0, 72) + "…" : cmd;
+    }
+    case "file_change": {
+      const changes = Array.isArray(args.changes)
+        ? (args.changes as Array<{ path?: string; kind?: string }>)
+        : [];
+      if (changes.length === 0) return "";
+      const first = shortPath(String(changes[0].path ?? ""));
+      return changes.length === 1 ? first : `${first} +${changes.length - 1}`;
+    }
     default: {
       // First string-valued arg as fallback
       for (const v of Object.values(args)) {
@@ -110,6 +128,9 @@ const TOOL_ICONS: Record<string, string> = {
   shell: "💻", bash: "💻", Bash: "💻",
   WebFetch: "🌐", WebSearch: "🔎",
   Task: "🤖",
+  // Codex format
+  command_execution: "💻",
+  file_change: "📝",
 };
 
 // ── ThinkingBlock ────────────────────────────────────────────────────────────

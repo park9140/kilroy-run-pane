@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Components } from "react-markdown";
@@ -25,7 +25,6 @@ interface CommitInfo {
 interface WorkspacePanelProps {
   runId: string;
   isExecuting: boolean;
-  onClose: () => void;
   selectedVisit?: VisitedStage | null;
   stageHistory?: VisitedStage[];
 }
@@ -393,9 +392,12 @@ function FileContentViewer({ content, fileName }: { content: string; fileName: s
   return <PlainViewer content={content} />;
 }
 
-export function WorkspacePanel({ runId, isExecuting, onClose, selectedVisit, stageHistory }: WorkspacePanelProps) {
+export function WorkspacePanel({ runId, isExecuting, selectedVisit, stageHistory }: WorkspacePanelProps) {
   const [data, setData] = useState<WorkspaceData | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  // Stable ref so fetchFiles can read current path without being in its dep array
+  const selectedPathRef = useRef<string | null>(null);
+  useEffect(() => { selectedPathRef.current = selectedPath; }, [selectedPath]);
   const [fileContent, setFileContent] = useState<string | null>(null);
   const [loadingContent, setLoadingContent] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -480,8 +482,11 @@ export function WorkspacePanel({ runId, isExecuting, onClose, selectedVisit, sta
       const d = await res.json() as WorkspaceData;
       setData(d);
       setError(null);
-      // Auto-select .ai/work_queue.json, .ai/spec.md, or first file on first load
-      if (!selectedPath && d.files.length > 0) {
+      // Maintain the current path if it still exists; otherwise auto-select a preferred file
+      const currentPath = selectedPathRef.current;
+      if (currentPath && d.files.some((f) => f.path === currentPath)) {
+        // path still valid — keep it (no setSelectedPath needed)
+      } else if (d.files.length > 0) {
         const preferred = d.files.find((f) =>
           f.path === ".ai/work_queue.json" || f.path === ".ai/spec.md"
         );
@@ -490,11 +495,10 @@ export function WorkspacePanel({ runId, isExecuting, onClose, selectedVisit, sta
     } catch (e) {
       setError(String(e));
     }
-  }, [runId, selectedPath]);
+  }, [runId]); // selectedPath intentionally excluded — read via selectedPathRef
 
-  // Reload file tree when pinnedRef changes; also reset selection so stale path is cleared
+  // Reload file tree when pinnedRef changes; clear stale content but preserve path
   useEffect(() => {
-    setSelectedPath(null);
     setFileContent(null);
     fetchFiles(pinnedRef);
   }, [pinnedRef]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -608,40 +612,35 @@ export function WorkspacePanel({ runId, isExecuting, onClose, selectedVisit, sta
   const selectedFile = data?.files.find((f) => f.path === selectedPath);
 
   return (
-    <div className="w-[480px] h-full border-l border-gray-800 flex flex-col shrink-0 bg-gray-900/30">
-      {/* Header */}
-      <div className="border-b border-gray-800 px-3 py-2 shrink-0 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-xs font-medium text-gray-200">Workspace</span>
-          {pinnedLabel ? (
-            <span className="text-[9px] font-mono text-violet-400 truncate max-w-[160px]" title={pinnedLabel}>
-              @ {pinnedLabel}
-            </span>
-          ) : isExecuting ? (
-            <span className="text-[9px] text-amber-400 animate-pulse">● live</span>
-          ) : null}
-        </div>
-        <div className="flex items-center gap-1.5 shrink-0">
+    <div className="flex-1 min-h-0 flex flex-col">
+      {/* Slim toolbar: pinned commit badge + actions */}
+      <div className="shrink-0 border-b border-gray-800/50 px-3 py-1 flex items-center gap-2">
+        {pinnedLabel ? (
+          <span className="text-[9px] font-mono text-violet-400 truncate" title={pinnedLabel}>
+            @ {pinnedLabel}
+          </span>
+        ) : isExecuting ? (
+          <span className="text-[9px] text-amber-400 animate-pulse">● live</span>
+        ) : (
+          <span className="text-[9px] text-gray-600">HEAD</span>
+        )}
+        <div className="ml-auto flex items-center gap-1">
           <button
             onClick={handleReveal}
             disabled={!data}
             title="Open worktree in file manager"
-            className="text-[10px] px-2 py-0.5 rounded border border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="text-[9px] px-1.5 py-0.5 rounded border border-gray-800 text-gray-600 hover:text-gray-300 hover:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           >
-            ⌘ Open folder
+            ⌘ folder
           </button>
           <button
             onClick={handleDownload}
             disabled={!data || downloading}
             title="Download workspace as zip"
-            className="text-[10px] px-2 py-0.5 rounded border border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="text-[9px] px-1.5 py-0.5 rounded border border-gray-800 text-gray-600 hover:text-gray-300 hover:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           >
             {downloading ? "…" : "⬇ zip"}
           </button>
-          <button
-            onClick={onClose}
-            className="text-gray-500 hover:text-gray-200 text-xs px-2 py-1 rounded hover:bg-gray-800"
-          >✕</button>
         </div>
       </div>
 

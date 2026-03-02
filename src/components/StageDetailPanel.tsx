@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import type { RunRecord, VisitedStage, TurnsData } from "../lib/types";
 import { FileVisualizer } from "./FileVisualizers";
 import { TurnViewer } from "./TurnViewer";
+import { WorkspacePanel } from "./WorkspacePanel";
 
 interface Props {
   run: RunRecord;
@@ -184,7 +185,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 // ── LLM node view ────────────────────────────────────────────────────────────
 
-type LLMTab = "response" | "turns" | "prompt";
+type LLMTab = "response" | "turns" | "prompt" | "workspace";
 
 /** Row for one previous visit — shows only the metadata we already have */
 function PreviousVisitItem({
@@ -219,6 +220,7 @@ function PreviousVisitItem({
 
 function LLMNodeContent({
   run, stagePath, stageFiles, isLatestVisit, isRunning, visitNum, totalVisits, otherVisits,
+  visit, stageHistory,
 }: {
   run: RunRecord;
   stagePath: string;
@@ -228,11 +230,13 @@ function LLMNodeContent({
   visitNum: number;
   totalVisits: number;
   otherVisits: { visit: VisitedStage; visitNum: number; stagePath: string }[];
+  visit: VisitedStage;
+  stageHistory: VisitedStage[];
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [tab, setTabState] = useState<LLMTab>(() => {
     const t = searchParams.get("tab");
-    return t === "response" || t === "turns" || t === "prompt" ? t : "response";
+    return t === "response" || t === "turns" || t === "prompt" || t === "workspace" ? t : "response";
   });
   const setTab = useCallback((newTab: LLMTab) => {
     setTabState(newTab);
@@ -321,9 +325,10 @@ function LLMNodeContent({
   }, [tab, stageFiles, run.id, stagePath, responseContent, turnsData, promptContent]);
 
   const tabs: { id: LLMTab; label: string; available: boolean }[] = [
-    { id: "response", label: "Response", available: stageFiles.hasResponse },
-    { id: "turns",    label: "Turns",    available: stageFiles.hasTurns },
-    { id: "prompt",   label: "Prompt",   available: stageFiles.hasPrompt },
+    { id: "response",  label: "Response",  available: stageFiles.hasResponse },
+    { id: "turns",     label: "Turns",     available: stageFiles.hasTurns },
+    { id: "prompt",    label: "Prompt",    available: stageFiles.hasPrompt },
+    { id: "workspace", label: "Workspace", available: true },
   ];
 
   // Only show tabs that are available or the active one
@@ -360,39 +365,49 @@ function LLMNodeContent({
       </div>
 
       {/* Tab content */}
-      <div className="flex-1 overflow-auto min-h-0">
-        {tab === "response" && (
-          <div className="p-3">
-            {/* Wait for turns when hasTurns — they may carry a cleaner response_text
-                (e.g. Codex agent_message) that replaces raw response.md content. */}
-            {(loading && responseContent === null) || (stageFiles.hasTurns && turnsData === null) ? (
-              <div className="text-xs text-gray-500">Loading…</div>
-            ) : turnsData?.response_text ? (
-              <FileVisualizer fileName="response.md" mime="text/markdown" content={turnsData.response_text} />
-            ) : responseContent !== null ? (
-              <FileVisualizer fileName="response.md" mime="text/markdown" content={responseContent} />
-            ) : (
-              <div className="text-xs text-gray-500">No response file available.</div>
-            )}
-          </div>
-        )}
-        {tab === "turns" && (
-          loading && turnsData === null ? (
-            <div className="p-3 text-xs text-gray-500">Loading…</div>
-          ) : turnsData !== null ? (
-            <TurnViewer data={turnsData} />
-          ) : null
-        )}
-        {tab === "prompt" && (
-          <div className="p-3">
-            {loading && promptContent === null ? (
-              <div className="text-xs text-gray-500">Loading…</div>
-            ) : promptContent !== null ? (
-              <FileVisualizer fileName="prompt.md" mime="text/markdown" content={promptContent} />
-            ) : null}
-          </div>
-        )}
-      </div>
+      {tab !== "workspace" && (
+        <div className="flex-1 overflow-auto min-h-0">
+          {tab === "response" && (
+            <div className="p-3">
+              {/* Wait for turns when hasTurns — they may carry a cleaner response_text
+                  (e.g. Codex agent_message) that replaces raw response.md content. */}
+              {(loading && responseContent === null) || (stageFiles.hasTurns && turnsData === null) ? (
+                <div className="text-xs text-gray-500">Loading…</div>
+              ) : turnsData?.response_text ? (
+                <FileVisualizer fileName="response.md" mime="text/markdown" content={turnsData.response_text} />
+              ) : responseContent !== null ? (
+                <FileVisualizer fileName="response.md" mime="text/markdown" content={responseContent} />
+              ) : (
+                <div className="text-xs text-gray-500">No response file available.</div>
+              )}
+            </div>
+          )}
+          {tab === "turns" && (
+            loading && turnsData === null ? (
+              <div className="p-3 text-xs text-gray-500">Loading…</div>
+            ) : turnsData !== null ? (
+              <TurnViewer data={turnsData} />
+            ) : null
+          )}
+          {tab === "prompt" && (
+            <div className="p-3">
+              {loading && promptContent === null ? (
+                <div className="text-xs text-gray-500">Loading…</div>
+              ) : promptContent !== null ? (
+                <FileVisualizer fileName="prompt.md" mime="text/markdown" content={promptContent} />
+              ) : null}
+            </div>
+          )}
+        </div>
+      )}
+      {tab === "workspace" && (
+        <WorkspacePanel
+          runId={run.id}
+          isExecuting={!!isRunning}
+          selectedVisit={visit}
+          stageHistory={stageHistory}
+        />
+      )}
 
       {/* Other visits — collapsible section */}
       {otherVisits.length > 0 && (
@@ -930,6 +945,8 @@ export function StageDetailPanel({
           visitNum={visitNum || 1}
           totalVisits={visitsForNode.length}
           otherVisits={otherVisitsForLLM}
+          visit={visit}
+          stageHistory={stageHistory}
         />
       )}
       {/* Fallback for older runs that pre-date attempt archiving */}

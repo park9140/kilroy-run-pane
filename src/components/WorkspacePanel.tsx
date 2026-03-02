@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Components } from "react-markdown";
+import type { VisitedStage } from "../lib/types";
 
 interface WorkspaceFile {
   path: string;
@@ -15,10 +16,18 @@ interface WorkspaceData {
   worktreePath: string;
 }
 
+interface CommitInfo {
+  sha: string;
+  node_id: string;
+  status: string;
+}
+
 interface WorkspacePanelProps {
   runId: string;
   isExecuting: boolean;
   onClose: () => void;
+  selectedVisit?: VisitedStage | null;
+  stageHistory?: VisitedStage[];
 }
 
 function fileIcon(name: string): string {
@@ -384,7 +393,7 @@ function FileContentViewer({ content, fileName }: { content: string; fileName: s
   return <PlainViewer content={content} />;
 }
 
-export function WorkspacePanel({ runId, isExecuting, onClose }: WorkspacePanelProps) {
+export function WorkspacePanel({ runId, isExecuting, onClose, selectedVisit, stageHistory }: WorkspacePanelProps) {
   const [data, setData] = useState<WorkspaceData | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState<string | null>(null);
@@ -397,6 +406,46 @@ export function WorkspacePanel({ runId, isExecuting, onClose }: WorkspacePanelPr
   // Which directories are expanded in the tree (default: .ai)
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(() => new Set([".ai"]));
 
+  // ── Commit tracking ────────────────────────────────────────────────────────
+  const [commits, setCommits] = useState<CommitInfo[]>([]);
+  // pinnedRef: the git SHA for the selected node's commit (null = show HEAD/live state)
+  const [pinnedRef, setPinnedRef] = useState<string | null>(null);
+  const [pinnedLabel, setPinnedLabel] = useState<string | null>(null);
+
+  // Fetch all run-scoped commits once
+  useEffect(() => {
+    fetch(`/api/runs/${runId}/workspace/commits`)
+      .then((r) => r.ok ? r.json() : [])
+      .then((data: CommitInfo[]) => setCommits(data))
+      .catch(() => {});
+  }, [runId]);
+
+  // Resolve the commit for the selected visit
+  useEffect(() => {
+    if (!selectedVisit || !commits.length || !stageHistory) {
+      setPinnedRef(null);
+      setPinnedLabel(null);
+      return;
+    }
+    // For branch visits use the parent fan_out_node; otherwise use the node itself
+    const effectiveNodeId = selectedVisit.fan_out_node ?? selectedVisit.node_id;
+    // Count main entries for effectiveNodeId up to (and including) this visit's position
+    let visitNum = 0;
+    for (const v of stageHistory) {
+      if (v.node_id === effectiveNodeId && !v.fan_out_node) visitNum++;
+      if (v === selectedVisit) break;
+    }
+    const nodeCommits = commits.filter((c) => c.node_id === effectiveNodeId);
+    const commit = nodeCommits[visitNum - 1];
+    if (commit) {
+      setPinnedRef(commit.sha);
+      setPinnedLabel(`${commit.sha.slice(0, 7)} ${effectiveNodeId}`);
+    } else {
+      setPinnedRef(null);
+      setPinnedLabel(null);
+    }
+  }, [selectedVisit, commits, stageHistory]);
+
   const toggleDir = useCallback((path: string) => {
     setExpandedDirs((prev) => {
       const next = new Set(prev);
@@ -406,9 +455,12 @@ export function WorkspacePanel({ runId, isExecuting, onClose }: WorkspacePanelPr
     });
   }, []);
 
-  const fetchFiles = useCallback(async () => {
+  const fetchFiles = useCallback(async (ref: string | null) => {
     try {
-      const res = await fetch(`/api/runs/${runId}/workspace`);
+      const url = ref
+        ? `/api/runs/${runId}/workspace?ref=${encodeURIComponent(ref)}`
+        : `/api/runs/${runId}/workspace`;
+      const res = await fetch(url);
       if (!res.ok) {
         if (res.status === 404) { setError("No worktree available for this run."); return; }
         setError(`Error ${res.status}`);
@@ -429,30 +481,39 @@ export function WorkspacePanel({ runId, isExecuting, onClose }: WorkspacePanelPr
     }
   }, [runId, selectedPath]);
 
-  // Initial load + auto-refresh while executing
+  // Reload file tree when pinnedRef changes; also reset selection so stale path is cleared
   useEffect(() => {
-    fetchFiles();
-    if (!isExecuting) return;
-    const id = setInterval(fetchFiles, 4000);
-    return () => clearInterval(id);
-  }, [fetchFiles, isExecuting]);
+    setSelectedPath(null);
+    setFileContent(null);
+    fetchFiles(pinnedRef);
+  }, [pinnedRef]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Load file content when selection changes
+  // Initial load + auto-refresh while executing (only in live/HEAD mode)
+  useEffect(() => {
+    if (pinnedRef) return; // pinned commits are immutable — no polling needed
+    fetchFiles(null);
+    if (!isExecuting) return;
+    const id = setInterval(() => fetchFiles(null), 4000);
+    return () => clearInterval(id);
+  }, [fetchFiles, isExecuting, pinnedRef]);
+
+  // Load file content when selection or pinnedRef changes
   useEffect(() => {
     if (!selectedPath) { setFileContent(null); return; }
     setLoadingContent(true);
-    fetch(`/api/runs/${runId}/workspace/file?path=${encodeURIComponent(selectedPath)}`)
+    const refPart = pinnedRef ? `&ref=${encodeURIComponent(pinnedRef)}` : "";
+    fetch(`/api/runs/${runId}/workspace/file?path=${encodeURIComponent(selectedPath)}${refPart}`)
       .then((r) => {
         if (!r.ok) throw new Error(`${r.status}`);
         return r.text();
       })
       .then((text) => { setFileContent(text); setLoadingContent(false); })
       .catch((e) => { setFileContent(`Error loading file: ${e}`); setLoadingContent(false); });
-  }, [runId, selectedPath]);
+  }, [runId, selectedPath, pinnedRef]);
 
-  // Auto-refresh content while executing
+  // Auto-refresh content while executing (only in live/HEAD mode)
   useEffect(() => {
-    if (!isExecuting || !selectedPath) return;
+    if (!isExecuting || !selectedPath || pinnedRef) return;
     const id = setInterval(async () => {
       try {
         const r = await fetch(`/api/runs/${runId}/workspace/file?path=${encodeURIComponent(selectedPath)}`);
@@ -460,22 +521,25 @@ export function WorkspacePanel({ runId, isExecuting, onClose }: WorkspacePanelPr
       } catch { /* ok */ }
     }, 4000);
     return () => clearInterval(id);
-  }, [runId, selectedPath, isExecuting]);
+  }, [runId, selectedPath, isExecuting, pinnedRef]);
 
-  const fetchDiff = useCallback(async () => {
+  const fetchDiff = useCallback(async (ref: string | null) => {
     try {
-      const res = await fetch(`/api/runs/${runId}/workspace/diff`);
+      const url = ref
+        ? `/api/runs/${runId}/workspace/commit-diff?ref=${encodeURIComponent(ref)}`
+        : `/api/runs/${runId}/workspace/diff`;
+      const res = await fetch(url);
       if (res.ok) setFileDiffs(parseDiffByFile(await res.text()));
     } catch { /* ignore */ }
   }, [runId]);
 
-  // Fetch diff on mount and auto-refresh while executing
+  // Fetch diff whenever pinnedRef changes, and auto-refresh while executing in live mode
   useEffect(() => {
-    fetchDiff();
-    if (!isExecuting) return;
-    const id = setInterval(fetchDiff, 4000);
+    fetchDiff(pinnedRef);
+    if (pinnedRef || !isExecuting) return; // pinned = immutable; stop polling
+    const id = setInterval(() => fetchDiff(null), 4000);
     return () => clearInterval(id);
-  }, [fetchDiff, isExecuting]);
+  }, [fetchDiff, isExecuting, pinnedRef]);
 
   // Auto-expand directories that contain changed files
   useEffect(() => {
@@ -528,9 +592,13 @@ export function WorkspacePanel({ runId, isExecuting, onClose }: WorkspacePanelPr
       <div className="border-b border-gray-800 px-3 py-2 shrink-0 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-xs font-medium text-gray-200">Workspace</span>
-          {isExecuting && (
+          {pinnedLabel ? (
+            <span className="text-[9px] font-mono text-violet-400 truncate max-w-[160px]" title={pinnedLabel}>
+              @ {pinnedLabel}
+            </span>
+          ) : isExecuting ? (
             <span className="text-[9px] text-amber-400 animate-pulse">● live</span>
-          )}
+          ) : null}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           <button

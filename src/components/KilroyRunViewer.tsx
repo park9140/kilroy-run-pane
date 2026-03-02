@@ -521,6 +521,8 @@ export function KilroyRunViewer() {
             runId={runId}
             isExecuting={runState?.computedStatus === "executing"}
             onClose={() => setWorkspaceOpen(false)}
+            selectedVisit={selectedHistoryIndex !== null ? stageHistory[selectedHistoryIndex] : null}
+            stageHistory={stageHistory}
           />
         )}
       </div>

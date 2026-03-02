@@ -251,12 +251,74 @@ export function registerRoutes(
     }
   });
 
-  // Workspace: list files in the worktree's .ai/ directory
-  app.get("/api/runs/:id/workspace", async (req: Request, res: Response) => {
+  // Workspace: list commits for this run, oldest-first
+  app.get("/api/runs/:id/workspace/commits", async (req: Request, res: Response) => {
     const id = String(req.params["id"] ?? "");
     const state = watcher.getState(id) ?? await watcher.readOnce(id);
     const worktreePath = state?.worktreePath;
     if (!worktreePath) { res.status(404).json({ error: "no worktree" }); return; }
+    const { execFile } = await import("node:child_process");
+    execFile(
+      "git", ["log", "--pretty=format:%H %s", "HEAD"],
+      { cwd: worktreePath, maxBuffer: 2 * 1024 * 1024 },
+      (err, stdout) => {
+        if (err && !stdout) { res.status(500).json({ error: String(err) }); return; }
+        const prefix = `attractor(${id}): `;
+        const commits: { sha: string; node_id: string; status: string }[] = [];
+        for (const line of stdout.split("\n")) {
+          if (!line.trim()) continue;
+          const spaceIdx = line.indexOf(" ");
+          if (spaceIdx < 0) continue;
+          const sha = line.slice(0, spaceIdx);
+          const subject = line.slice(spaceIdx + 1);
+          if (!subject.startsWith(prefix)) continue;
+          const rest = subject.slice(prefix.length);
+          const m = /^(.+) \((.+)\)$/.exec(rest);
+          if (!m) continue;
+          commits.push({ sha, node_id: m[1], status: m[2] });
+        }
+        commits.reverse(); // oldest-first
+        res.json(commits);
+      }
+    );
+  });
+
+  // Workspace: list files in the worktree (or at a specific git ref)
+  app.get("/api/runs/:id/workspace", async (req: Request, res: Response) => {
+    const id = String(req.params["id"] ?? "");
+    const ref = String(req.query["ref"] ?? "");
+    const state = watcher.getState(id) ?? await watcher.readOnce(id);
+    const worktreePath = state?.worktreePath;
+    if (!worktreePath) { res.status(404).json({ error: "no worktree" }); return; }
+
+    // When a git ref is supplied, list files from the commit tree
+    if (ref) {
+      if (!/^[0-9a-f]{6,40}$/i.test(ref)) { res.status(400).json({ error: "invalid ref" }); return; }
+      const { execFile } = await import("node:child_process");
+      execFile(
+        "git", ["ls-tree", "-r", "-l", ref],
+        { cwd: worktreePath, maxBuffer: 10 * 1024 * 1024 },
+        (err, stdout) => {
+          if (err && !stdout) { res.status(500).json({ error: String(err) }); return; }
+          type WorkspaceFile = { path: string; name: string; size: number; mtime: number };
+          const files: WorkspaceFile[] = [];
+          for (const line of stdout.split("\n")) {
+            if (!line.trim()) continue;
+            // Format: <mode> <type> <sha>    <size>\t<path>
+            const tabIdx = line.indexOf("\t");
+            if (tabIdx < 0) continue;
+            const filePath = line.slice(tabIdx + 1).trim();
+            const meta = line.slice(0, tabIdx).trim().split(/\s+/);
+            const size = meta[3] ? parseInt(meta[3], 10) : 0;
+            const name = filePath.split("/").pop() ?? filePath;
+            files.push({ path: filePath, name, size: isNaN(size) ? 0 : size, mtime: 0 });
+          }
+          files.sort((a, b) => a.path.localeCompare(b.path));
+          res.json({ files, worktreePath });
+        }
+      );
+      return;
+    }
 
     // Skip .git regardless of whether it's a file or dir (git worktrees use a .git file)
     const SKIP = new Set([".git", "node_modules"]);
@@ -286,15 +348,31 @@ export function registerRoutes(
     res.json({ files, worktreePath });
   });
 
-  // Workspace: serve a single file by relative path within the worktree
+  // Workspace: serve a single file by relative path (or at a specific git ref)
   app.get("/api/runs/:id/workspace/file", async (req: Request, res: Response) => {
     const id = String(req.params["id"] ?? "");
     const relPath = String(req.query["path"] ?? "");
+    const ref = String(req.query["ref"] ?? "");
     if (!relPath || relPath.includes("..")) { res.status(400).json({ error: "invalid path" }); return; }
 
     const state = watcher.getState(id) ?? await watcher.readOnce(id);
     const worktreePath = state?.worktreePath;
     if (!worktreePath) { res.status(404).json({ error: "no worktree" }); return; }
+
+    if (ref) {
+      if (!/^[0-9a-f]{6,40}$/i.test(ref)) { res.status(400).json({ error: "invalid ref" }); return; }
+      const { execFile } = await import("node:child_process");
+      execFile(
+        "git", ["show", `${ref}:${relPath}`],
+        { cwd: worktreePath, maxBuffer: 10 * 1024 * 1024, encoding: "utf8" } as Parameters<typeof execFile>[2],
+        (err, stdout, stderr) => {
+          if (err) { res.status(404).json({ error: (stderr as string) || "not found" }); return; }
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.send(stdout);
+        }
+      );
+      return;
+    }
 
     const absPath = join(worktreePath, relPath);
     // Ensure path stays within worktree
@@ -342,6 +420,39 @@ export function registerRoutes(
         if (err && !stdout) {
           res.status(500).json({ error: stderr || String(err) }); return;
         }
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.send(stdout);
+      }
+    );
+  });
+
+  // Workspace: diff introduced by a specific commit (git diff PARENT..SHA)
+  app.get("/api/runs/:id/workspace/commit-diff", async (req: Request, res: Response) => {
+    const id = String(req.params["id"] ?? "");
+    const ref = String(req.query["ref"] ?? "");
+    if (!ref || !/^[0-9a-f]{6,40}$/i.test(ref)) { res.status(400).json({ error: "invalid ref" }); return; }
+    const state = watcher.getState(id) ?? await watcher.readOnce(id);
+    const worktreePath = state?.worktreePath;
+    if (!worktreePath) { res.status(404).json({ error: "no worktree" }); return; }
+    const { execFile } = await import("node:child_process");
+    // git diff PARENT..SHA; fall back to git show --format="" for root commit (no parent)
+    execFile(
+      "git", ["diff", `${ref}^..${ref}`],
+      { cwd: worktreePath, maxBuffer: 10 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err && !stdout) {
+          execFile(
+            "git", ["show", "--format=", ref],
+            { cwd: worktreePath, maxBuffer: 10 * 1024 * 1024 },
+            (err2, stdout2, stderr2) => {
+              if (err2 && !stdout2) { res.status(500).json({ error: String(stderr2) || String(err2) }); return; }
+              res.setHeader("Content-Type", "text/plain; charset=utf-8");
+              res.send(stdout2);
+            }
+          );
+          return;
+        }
+        void stderr;
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
         res.send(stdout);
       }

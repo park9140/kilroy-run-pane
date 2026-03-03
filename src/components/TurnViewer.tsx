@@ -89,6 +89,13 @@ function toolLabel(toolName: string, args: Record<string, unknown>): string {
       const cmd = m ? m[1] : raw;
       return cmd.length > 72 ? cmd.slice(0, 72) + "…" : cmd;
     }
+    case "apply_patch": {
+      // Extract file paths from the patch header lines
+      const patch = String(args.patch ?? "");
+      const files = [...patch.matchAll(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/gm)].map((m) => shortPath(m[1]));
+      if (files.length === 0) return "";
+      return files.length === 1 ? files[0] : `${files[0]} +${files.length - 1}`;
+    }
     case "file_change": {
       const changes = Array.isArray(args.changes)
         ? (args.changes as Array<{ path?: string; kind?: string }>)
@@ -128,6 +135,7 @@ const TOOL_ICONS: Record<string, string> = {
   shell: "💻", bash: "💻", Bash: "💻",
   WebFetch: "🌐", WebSearch: "🔎",
   Task: "🤖",
+  apply_patch: "📝",
   // Codex format
   command_execution: "💻",
   file_change: "📝",
@@ -166,6 +174,7 @@ function ToolCallBlock({ tc }: { tc: ToolCallRecord }) {
 
   const isWrite = tc.tool_name === "write_file" || tc.tool_name === "Write";
   const isEdit = tc.tool_name === "edit_file" || tc.tool_name === "Edit";
+  const isPatch = tc.tool_name === "apply_patch";
 
   // For write_file/Write: render the content arg as the primary content
   const writeContent = isWrite ? String(args.content ?? args.text ?? "") : null;
@@ -179,8 +188,12 @@ function ToolCallBlock({ tc }: { tc: ToolCallRecord }) {
     ? buildPseudoDiff(editFn ?? "file", editOld, editNew)
     : null;
 
+  // For apply_patch: render the patch content as a diff
+  const patchContent = isPatch ? String(args.patch ?? "") : null;
+
   const hasExpandable = isWrite ? (writeContent?.length ?? 0) > 0
     : isEdit ? editDiff !== null
+    : isPatch ? (patchContent?.length ?? 0) > 0
     : tc.output.length > 0;
 
   const errStyle = tc.is_error
@@ -225,6 +238,10 @@ function ToolCallBlock({ tc }: { tc: ToolCallRecord }) {
                 editing {String(args.path ?? args.file_path ?? editFn)}
               </div>
               <FileVisualizer fileName="edit.diff" content={editDiff} />
+            </div>
+          ) : isPatch && patchContent ? (
+            <div className="p-1">
+              <FileVisualizer fileName="patch.diff" content={patchContent} />
             </div>
           ) : (
             <div className="p-1">

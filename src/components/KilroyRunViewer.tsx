@@ -8,6 +8,12 @@ import { NodeDetailPanel } from "./NodeDetailPanel";
 import type { ComputedStatus } from "../lib/types";
 import { parseAllNodeLabels } from "../lib/dotUtils";
 
+function shortPath(p: string): string {
+  const parts = p.split("/").filter(Boolean);
+  if (parts.length <= 2) return p;
+  return "…/" + parts.slice(-2).join("/");
+}
+
 function StatusBadge({ status }: { status: ComputedStatus | undefined }) {
   if (!status) return null;
   const config: Record<ComputedStatus, { label: string; classes: string }> = {
@@ -237,6 +243,11 @@ export function KilroyRunViewer() {
         <span className="text-xs font-mono text-gray-400 truncate max-w-xs" title={runId}>{runId}</span>
         {runState && <StatusBadge status={runState.computedStatus} />}
         {run?.dot_file && <span className="text-xs text-gray-500">{run.dot_file}</span>}
+        {run?.repo_path && (
+          <span className="text-xs text-gray-600 font-mono truncate max-w-xs" title={run.repo_path}>
+            {shortPath(run.repo_path)}
+          </span>
+        )}
         {run?.last_heartbeat && <HeartbeatAge lastHeartbeat={run.last_heartbeat} />}
         <div className="ml-auto flex items-center gap-2">
           <span

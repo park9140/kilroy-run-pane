@@ -437,14 +437,28 @@ function LLMNodeContent({
 
 // ── Tool node view ────────────────────────────────────────────────────────────
 
+type ToolTab = "output" | "workspace";
+
 function ToolNodeContent({
-  run, stagePath, stageFiles, dotAttrs,
+  run, stagePath, stageFiles, dotAttrs, isRunning, visit, stageHistory,
 }: {
   run: RunRecord;
   stagePath: string;
   stageFiles: StageFiles;
   dotAttrs: Record<string, string>;
+  isRunning?: boolean;
+  visit: VisitedStage;
+  stageHistory: VisitedStage[];
 }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [tab, setTabState] = useState<ToolTab>(() => {
+    const t = searchParams.get("tab");
+    return t === "workspace" ? "workspace" : "output";
+  });
+  const setTab = useCallback((newTab: ToolTab) => {
+    setTabState(newTab);
+    setSearchParams((p) => { p.set("tab", newTab); return p; }, { replace: true });
+  }, [setSearchParams]);
   const [toolInv, setToolInv] = useState<Record<string, unknown> | null>(null);
   const [stdout, setStdout] = useState<string | null>(null);
   const [stderr, setStderr] = useState<string | null>(null);
@@ -481,47 +495,84 @@ function ToolNodeContent({
 
   const label = dotAttrs.label;
 
-  if (loading && !command && !stdout) {
-    return <div className="flex-1 p-3 text-xs text-gray-500">Loading…</div>;
-  }
+  const tabs: { id: ToolTab; label: string }[] = [
+    { id: "output",    label: "Output" },
+    { id: "workspace", label: "Workspace" },
+  ];
 
   return (
-    <div className="flex-1 overflow-auto p-3 space-y-4">
-      {/* What it does: label + command */}
-      {(label || command) && (
-        <div>
-          {label && <div className="text-sm text-gray-300 font-medium mb-1.5">{label}</div>}
-          {command && (
-            <>
-              <SectionLabel>Command</SectionLabel>
-              <pre className="text-[11px] text-gray-300 font-mono bg-gray-900/60 rounded p-2 whitespace-pre-wrap break-all">
-                {command}
-              </pre>
-            </>
-          )}
-        </div>
-      )}
+    <>
+      {/* Tab bar */}
+      <div className="flex items-center border-b border-gray-800 shrink-0 overflow-x-auto">
+        {tabs.map(({ id, label: tabLabel }) => (
+          <button
+            key={id}
+            onClick={() => setTab(id)}
+            className={`px-3 py-1.5 text-xs whitespace-nowrap ${
+              tab === id
+                ? "text-gray-100 border-b-2 border-blue-500"
+                : "text-gray-500 hover:text-gray-300"
+            }`}
+          >
+            {tabLabel}
+          </button>
+        ))}
+        {isRunning && (
+          <span className="ml-auto px-2 text-[10px] text-amber-400/70 animate-pulse shrink-0">live</span>
+        )}
+      </div>
 
-      {/* What it produced: stdout */}
-      {stdout ? (
-        <div>
-          <SectionLabel>Output</SectionLabel>
-          <FileVisualizer fileName="stdout.log" mime="text/plain" content={stdout} />
-        </div>
-      ) : !loading ? (
-        <div className="text-xs text-gray-600 italic">No output captured.</div>
-      ) : null}
+      {tab === "output" && (
+        loading && !command && !stdout ? (
+          <div className="flex-1 p-3 text-xs text-gray-500">Loading…</div>
+        ) : (
+          <div className="flex-1 overflow-auto p-3 space-y-4">
+            {/* What it does: label + command */}
+            {(label || command) && (
+              <div>
+                {label && <div className="text-sm text-gray-300 font-medium mb-1.5">{label}</div>}
+                {command && (
+                  <>
+                    <SectionLabel>Command</SectionLabel>
+                    <pre className="text-[11px] text-gray-300 font-mono bg-gray-900/60 rounded p-2 whitespace-pre-wrap break-all">
+                      {command}
+                    </pre>
+                  </>
+                )}
+              </div>
+            )}
 
-      {/* Errors: stderr (only if non-empty) */}
-      {stderr && (
-        <div>
-          <SectionLabel>
-            <span className="text-red-500/70">Stderr</span>
-          </SectionLabel>
-          <FileVisualizer fileName="stderr.log" mime="text/plain" content={stderr} />
-        </div>
+            {/* What it produced: stdout */}
+            {stdout ? (
+              <div>
+                <SectionLabel>Output</SectionLabel>
+                <FileVisualizer fileName="stdout.log" mime="text/plain" content={stdout} />
+              </div>
+            ) : !loading ? (
+              <div className="text-xs text-gray-600 italic">No output captured.</div>
+            ) : null}
+
+            {/* Errors: stderr (only if non-empty) */}
+            {stderr && (
+              <div>
+                <SectionLabel>
+                  <span className="text-red-500/70">Stderr</span>
+                </SectionLabel>
+                <FileVisualizer fileName="stderr.log" mime="text/plain" content={stderr} />
+              </div>
+            )}
+          </div>
+        )
       )}
-    </div>
+      {tab === "workspace" && (
+        <WorkspacePanel
+          runId={run.id}
+          isExecuting={!!isRunning}
+          selectedVisit={visit}
+          stageHistory={stageHistory}
+        />
+      )}
+    </>
   );
 }
 
@@ -969,9 +1020,12 @@ export function StageDetailPanel({
       {nodeKind === "tool" && (
         <ToolNodeContent
           run={run}
-          stagePath={stagePath}
+          stagePath={effectiveStagePath}
           stageFiles={stageFiles}
           dotAttrs={dotAttrs}
+          isRunning={isRunning}
+          visit={visit}
+          stageHistory={stageHistory}
         />
       )}
 

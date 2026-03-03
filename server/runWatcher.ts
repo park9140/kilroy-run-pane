@@ -323,6 +323,7 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
     const run: RunRecord = {
       id: runId,
       repo,
+      repo_path: repoPath,
       dot_file: graphName,
       status,
       current_node: currentNode,
@@ -590,6 +591,8 @@ export class RunWatcher extends EventEmitter {
     const state = await this.readRunState(runId, runDir);
     if (state) this.cache.set(runId, state);
 
+    const TERMINAL = new Set(["completed", "failed", "interrupted", "stopped"]);
+
     // Debounced update: batch rapid file-change bursts into one re-read
     let debounce: ReturnType<typeof setTimeout> | null = null;
     const scheduleUpdate = () => {
@@ -600,8 +603,15 @@ export class RunWatcher extends EventEmitter {
         if (newState) {
           this.cache.set(runId, newState);
           this.emit("update", runId, newState);
+          // Once a run reaches a terminal state, stop the expensive file watcher
+          // and polling. The cache stays alive for any SSE clients still connected.
+          if (TERMINAL.has(newState.run.status ?? "") || TERMINAL.has(newState.computedStatus ?? "")) {
+            this.watchers.get(runId)?.close();
+            this.watchers.delete(runId);
+            this.stopPolling(runId);
+          }
         }
-      }, 200);
+      }, 500);
     };
 
     // Watch only state-relevant files using polling to avoid EMFILE.
@@ -611,7 +621,7 @@ export class RunWatcher extends EventEmitter {
       persistent: false,
       ignoreInitial: true,
       usePolling: true,
-      interval: 1000,
+      interval: 5000,
       ignored: (filePath: string) => {
         const base = filePath.split("/").pop() ?? "";
         const STATE_FILES = new Set([
@@ -624,12 +634,19 @@ export class RunWatcher extends EventEmitter {
       },
     });
 
-    fsWatcher.on("change", scheduleUpdate);
-    fsWatcher.on("add", scheduleUpdate);
-    this.watchers.set(runId, fsWatcher);
+    const isTerminal = state && (TERMINAL.has(state.run.status ?? "") || TERMINAL.has(state.computedStatus ?? ""));
 
-    if (state?.run?.status === "executing") {
-      this.startPolling(runId, runDir);
+    if (isTerminal) {
+      // Run already finished — no need to watch or poll, just return cached state
+      fsWatcher.close();
+    } else {
+      fsWatcher.on("change", scheduleUpdate);
+      fsWatcher.on("add", scheduleUpdate);
+      this.watchers.set(runId, fsWatcher);
+
+      if (state?.run?.status === "executing") {
+        this.startPolling(runId, runDir);
+      }
     }
 
     return state;
@@ -648,9 +665,10 @@ export class RunWatcher extends EventEmitter {
 
   private startPolling(runId: string, runDir: string) {
     if (this.polling.has(runId)) return;
+    const TERMINAL = new Set(["completed", "failed", "interrupted", "stopped"]);
     const interval = setInterval(async () => {
       const cached = this.cache.get(runId);
-      if (cached && ["completed", "failed", "interrupted", "stopped"].includes(cached.run.status ?? "")) {
+      if (cached && (TERMINAL.has(cached.run.status ?? "") || TERMINAL.has(cached.computedStatus ?? ""))) {
         this.stopPolling(runId);
         return;
       }
@@ -661,8 +679,12 @@ export class RunWatcher extends EventEmitter {
           this.cache.set(runId, newState);
           this.emit("update", runId, newState);
         }
+        // Also stop polling when we detect terminal via newly-read state
+        if (TERMINAL.has(newState.run.status ?? "") || TERMINAL.has(newState.computedStatus ?? "")) {
+          this.stopPolling(runId);
+        }
       }
-    }, 10_000);
+    }, 30_000);
     this.polling.set(runId, interval);
   }
 

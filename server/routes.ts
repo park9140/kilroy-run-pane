@@ -55,11 +55,13 @@ export function registerRoutes(
         let started_at: string | null = null;
         let status = "running";
 
+        let repo_path: string | null = null;
         try {
           const manifestRaw = await readFile(join(runDir, "manifest.json"), "utf8");
           const manifest = JSON.parse(manifestRaw) as Record<string, unknown>;
           graph_name = String(manifest.graph_name ?? "");
           const repoPath = String(manifest.repo_path ?? "");
+          repo_path = repoPath || null;
           repo = repoPath ? repoPath.split("/").pop() ?? null : null;
           const goalStr = String(manifest.goal ?? "");
           goal = goalStr ? goalStr.slice(0, 200) : null;
@@ -71,6 +73,7 @@ export function registerRoutes(
             const run = JSON.parse(runRaw) as Record<string, unknown>;
             graph_name = String(run.dot_file ?? "");
             const repoPath = String(run.repo ?? "");
+            repo_path = repoPath || null;
             repo = repoPath ? repoPath.split("/").pop() ?? null : null;
             started_at = typeof run.started_at === "string" ? run.started_at : null;
           } catch { /* skip */ }
@@ -104,9 +107,9 @@ export function registerRoutes(
           } catch { /* ok */ }
         }
 
-        return { id, graph_name, repo, goal, started_at: started_at || null, status, source_dir: dir };
+        return { id, graph_name, repo, repo_path, goal, started_at: started_at || null, status, source_dir: dir };
       } catch {
-        return { id, graph_name: null, repo: null, goal: null, started_at: null, status: "unknown", source_dir: dir };
+        return { id, graph_name: null, repo: null, repo_path: null, goal: null, started_at: null, status: "unknown", source_dir: dir };
       }
     }));
     // Sort by started_at descending if available, otherwise leave ULID order

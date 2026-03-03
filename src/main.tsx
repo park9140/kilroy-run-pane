@@ -23,6 +23,7 @@ interface RunSummary {
   id: string;
   graph_name: string | null;
   repo: string | null;
+  repo_path: string | null;
   goal: string | null;
   started_at: string | null;
   status: string;
@@ -49,6 +50,13 @@ function statusDot(status: string): { color: string; label: string } {
     case "running": return { color: "bg-amber-400 animate-pulse", label: "Running" };
     default: return { color: "bg-gray-600", label: status };
   }
+}
+
+/** Shorten an absolute repo path for display: show last 2 segments */
+function shortRepoPath(p: string): string {
+  const parts = p.split("/").filter(Boolean);
+  if (parts.length <= 2) return p;
+  return "…/" + parts.slice(-2).join("/");
 }
 
 /** Very simple fuzzy match: all query words must appear in the target string */
@@ -100,7 +108,7 @@ function RunList() {
   const filtered = useMemo(() => {
     if (!query.trim()) return runs;
     return runs.filter((r) => {
-      const searchable = [r.id, r.graph_name, r.repo, r.goal, r.source_dir].filter(Boolean).join(" ");
+      const searchable = [r.id, r.graph_name, r.repo, r.repo_path, r.goal, r.source_dir].filter(Boolean).join(" ");
       return fuzzyMatch(searchable, query);
     });
   }, [runs, query]);
@@ -159,9 +167,11 @@ function RunList() {
                   {run.graph_name && (
                     <span className="text-sm font-medium text-gray-200">{run.graph_name}</span>
                   )}
-                  {run.repo && (
+                  {run.repo_path ? (
+                    <span className="text-xs text-gray-500 font-mono truncate" title={run.repo_path}>{shortRepoPath(run.repo_path)}</span>
+                  ) : run.repo ? (
                     <span className="text-xs text-gray-500">{run.repo}</span>
-                  )}
+                  ) : null}
                   {sourceName && (
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-500 font-mono">{sourceName}</span>
                   )}

@@ -17,6 +17,7 @@ export interface RunAnnotation {
 export interface RunRecord {
   id: string;
   repo?: string;
+  repo_path?: string;
   dot_file?: string;
   status?: RunStatus;
   current_node?: string;

@@ -376,6 +376,7 @@ export function KilroyRunViewer() {
               stageHistory={stageHistory}
               hoveredHistoryIndex={hoveredHistoryIndex}
               edgeToEdge
+              focusNode={!chrome ? highlightNode : undefined}
             />
           ) : (
             <div className="flex items-center justify-center h-full text-gray-600 text-sm">

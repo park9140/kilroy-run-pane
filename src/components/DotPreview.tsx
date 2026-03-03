@@ -21,6 +21,8 @@ interface Props {
   edgeToEdge?: boolean;
   stageHistory?: VisitedStage[];
   hoveredHistoryIndex?: number | null;
+  /** When set, smoothly pan+zoom so this node fills ~25% of the viewport. */
+  focusNode?: string;
 }
 
 /** Parse DOT source to identify nodes with git worktree/branch operations.
@@ -223,6 +225,7 @@ export function DotPreview({
   edgeToEdge,
   stageHistory,
   hoveredHistoryIndex,
+  focusNode,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -976,11 +979,79 @@ export function DotPreview({
   }, [reportAnnotationsByNode, onReportAnnotationClick, dot, svgVersion]);
 
   // Apply transform to SVG.
+  // When focusNode triggers a transform change, animate it smoothly.
+  const animatingFocus = useRef(false);
   useEffect(() => {
     if (svgRef.current) {
+      if (animatingFocus.current) {
+        svgRef.current.style.transition = "transform 0.5s ease-out";
+        // Clear the flag and remove transition after animation completes.
+        const onEnd = () => {
+          if (svgRef.current) svgRef.current.style.transition = "";
+          animatingFocus.current = false;
+        };
+        svgRef.current.addEventListener("transitionend", onEnd, { once: true });
+      }
       svgRef.current.style.transform = `translate(${translate.x}px, ${translate.y}px) scale(${scale})`;
     }
   }, [scale, translate]);
+
+  // Auto-focus on a specific node: pan+zoom so the node fills ~25% of the viewport.
+  const prevFocusNode = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!focusNode || focusNode === prevFocusNode.current) return;
+    prevFocusNode.current = focusNode;
+    const svg = svgRef.current;
+    const container = containerRef.current;
+    if (!svg || !container) return;
+
+    // Find the node's <g> element by matching the <title> text.
+    const nodeG = Array.from(svg.querySelectorAll("g.node")).find(
+      (g) => g.querySelector("title")?.textContent?.trim() === focusNode
+    ) as SVGGElement | undefined;
+    if (!nodeG) return;
+
+    // getBBox() returns coordinates in SVG userspace (viewBox units).
+    // The SVG is rendered at width/height: 100% so the browser scales it to fit.
+    // We need to convert SVG userspace → pixel space to align with our CSS transform.
+    const nodeBBox = nodeG.getBBox();
+    const vb = svg.viewBox.baseVal;
+    const cw = container.clientWidth;
+    const ch = container.clientHeight;
+
+    // SVG natural scale: how viewBox maps to the container at transform scale=1.
+    // The SVG preserves aspect ratio (default preserveAspectRatio="xMidYMid meet"),
+    // so the effective scale is the smaller of the two axis ratios.
+    const svgScaleX = cw / (vb.width || cw);
+    const svgScaleY = ch / (vb.height || ch);
+    const svgBaseScale = Math.min(svgScaleX, svgScaleY);
+
+    // Node dimensions in pixels at CSS scale=1.
+    const nodePixelW = nodeBBox.width * svgBaseScale;
+    const nodePixelH = nodeBBox.height * svgBaseScale;
+
+    // Target: node should fill ~25% of viewport area.
+    // sqrt(0.25) = 0.5, so the node should span ~50% of each dimension.
+    const desiredW = cw * 0.5;
+    const desiredH = ch * 0.5;
+    const targetScale = Math.min(
+      Math.max(Math.min(desiredW / nodePixelW, desiredH / nodePixelH), MIN_SCALE),
+      MAX_SCALE
+    );
+
+    // Node center in pixel space at scale=1 (accounting for viewBox offset + centering).
+    const svgOffsetX = (cw - vb.width * svgBaseScale) / 2;
+    const svgOffsetY = (ch - vb.height * svgBaseScale) / 2;
+    const nodeCxPx = svgOffsetX + (nodeBBox.x + nodeBBox.width / 2 - vb.x) * svgBaseScale;
+    const nodeCyPx = svgOffsetY + (nodeBBox.y + nodeBBox.height / 2 - vb.y) * svgBaseScale;
+
+    // Set transform to center node in viewport.
+    const tx = cw / 2 - nodeCxPx * targetScale;
+    const ty = ch / 2 - nodeCyPx * targetScale;
+
+    animatingFocus.current = true;
+    setTransform({ scale: targetScale, x: tx, y: ty });
+  }, [focusNode, svgVersion]);
 
   // Zoom toward a point in container-local coordinates using a continuous factor.
   const zoomAt = useCallback((factor: number, cx: number, cy: number) => {
@@ -1031,6 +1102,9 @@ export function DotPreview({
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     if (disableInteraction) return;
     if (e.button !== 0) return;
+    // Cancel any in-progress focus animation so dragging feels instant.
+    if (svgRef.current) svgRef.current.style.transition = "";
+    animatingFocus.current = false;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     dragRef.current = {
       startX: e.clientX,

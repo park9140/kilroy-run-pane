@@ -23,6 +23,11 @@ interface CommitInfo {
   status: string;
 }
 
+interface BranchInfo {
+  name: string;
+  sha: string;
+}
+
 interface WorkspacePanelProps {
   runId: string;
   isExecuting: boolean;
@@ -423,18 +428,24 @@ export function WorkspacePanel({ runId, isExecuting, selectedVisit, stageHistory
 
   // ── Commit tracking ────────────────────────────────────────────────────────
   const [commits, setCommits] = useState<CommitInfo[]>([]);
-  // pinnedRef: ref used for file tree and content (for branch visits = fan_out_sha^,
-  //            so the tree shows the code that was being processed, not the empty fan_out commit)
+  const [branches, setBranches] = useState<BranchInfo[]>([]);
+  // pinnedRef: ref used for file tree and content
   const [pinnedRef, setPinnedRef] = useState<string | null>(null);
-  // pinnedDiffRef: ref used for the commit-diff (always the fan_out/node SHA itself)
+  // pinnedDiffRef: ref used for the commit-diff endpoint (the "to" side)
   const [pinnedDiffRef, setPinnedDiffRef] = useState<string | null>(null);
+  // pinnedDiffBase: optional "from" side for range diffs (fan-out branch work)
+  const [pinnedDiffBase, setPinnedDiffBase] = useState<string | null>(null);
   const [pinnedLabel, setPinnedLabel] = useState<string | null>(null);
 
-  // Fetch all run-scoped commits once
+  // Fetch all run-scoped commits and branch refs once
   useEffect(() => {
     fetch(`/api/runs/${runId}/workspace/commits`)
       .then((r) => r.ok ? r.json() : [])
       .then((data: CommitInfo[]) => setCommits(data))
+      .catch(() => {});
+    fetch(`/api/runs/${runId}/workspace/branches`)
+      .then((r) => r.ok ? r.json() : [])
+      .then((data: BranchInfo[]) => setBranches(data))
       .catch(() => {});
   }, [runId]);
 
@@ -443,27 +454,81 @@ export function WorkspacePanel({ runId, isExecuting, selectedVisit, stageHistory
     if (!selectedVisit || !commits.length || !stageHistory) {
       setPinnedRef(null);
       setPinnedDiffRef(null);
+      setPinnedDiffBase(null);
       setPinnedLabel(null);
       return;
     }
-    // For branch visits use the parent fan_out_node; otherwise use the node itself
-    const effectiveNodeId = selectedVisit.fan_out_node ?? selectedVisit.node_id;
-    // Count main entries for effectiveNodeId up to (and including) this visit's position
+    // Try the node's own commit first (works for both main and branch nodes
+    // since git log --all includes orphaned branch commits).
     let visitNum = 0;
     for (const v of stageHistory) {
-      if (v.node_id === effectiveNodeId && !v.fan_out_node) visitNum++;
+      if (v.node_id === selectedVisit.node_id) visitNum++;
       if (v === selectedVisit) break;
     }
-    const nodeCommits = commits.filter((c) => c.node_id === effectiveNodeId);
-    const commit = nodeCommits[visitNum - 1];
+    let nodeCommits = commits.filter((c) => c.node_id === selectedVisit.node_id);
+    let commit = nodeCommits[visitNum - 1];
+
+    // For fan-out branch visits, try to find the branch's git ref and diff
+    // against the fan-out orchestrator's commit (showing all branch work).
+    if (selectedVisit.fan_out_node && selectedVisit.branch_key && selectedVisit.stage_path) {
+      // Construct expected branch ref from stage_path:
+      //   stage_path: "parallel/dod_fanout/01-dod_design/dod_design"
+      //   → branch: "attractor/run/parallel/<runId>/dod_fanout/dod_design"
+      //   With pass: "parallel/plan_fanout/pass4/05-plan_product/plan_product"
+      //   → branch: "attractor/run/parallel/<runId>/plan_fanout/pass4/plan_product"
+      const pathParts = selectedVisit.stage_path.split("/");
+      const fanoutGroup = pathParts[1]; // e.g. "dod_fanout"
+      const hasPass = pathParts[2]?.startsWith("pass");
+      const branchRefSuffix = hasPass
+        ? `${fanoutGroup}/${pathParts[2]}/${selectedVisit.branch_key}`
+        : `${fanoutGroup}/${selectedVisit.branch_key}`;
+      const expectedRef = `attractor/run/parallel/${runId}/${branchRefSuffix}`;
+      const branch = branches.find((b) => b.name === expectedRef);
+
+      if (branch) {
+        // Find the fan-out orchestrator's commit as the diff base
+        let fanoutVisitNum = 0;
+        for (const v of stageHistory) {
+          if (v.node_id === selectedVisit.fan_out_node && !v.fan_out_node) fanoutVisitNum++;
+          if (v === selectedVisit) break;
+        }
+        const fanoutCommits = commits.filter((c) => c.node_id === selectedVisit.fan_out_node);
+        const fanoutCommit = fanoutCommits[fanoutVisitNum - 1];
+
+        // File tree at branch tip (shows state after branch work)
+        setPinnedRef(branch.sha);
+        // Diff from fan-out commit to branch tip (shows what this branch changed)
+        setPinnedDiffRef(branch.sha);
+        setPinnedDiffBase(fanoutCommit?.sha ?? null);
+        const baseShort = fanoutCommit ? fanoutCommit.sha.slice(0, 7) : "root";
+        setPinnedLabel(`${baseShort}..${branch.sha.slice(0, 7)} ${selectedVisit.branch_key}`);
+        return;
+      }
+    }
+
+    // Fallback for non-branch nodes or when branch ref not found:
+    // use the fan-out parent's commit if the node has no own commit.
+    if (!commit && selectedVisit.fan_out_node) {
+      visitNum = 0;
+      for (const v of stageHistory) {
+        if (v.node_id === selectedVisit.fan_out_node && !v.fan_out_node) visitNum++;
+        if (v === selectedVisit) break;
+      }
+      nodeCommits = commits.filter((c) => c.node_id === selectedVisit.fan_out_node);
+      commit = nodeCommits[visitNum - 1];
+      if (commit) {
+        setPinnedRef(`${commit.sha}^`);
+        setPinnedDiffRef(commit.sha);
+        setPinnedDiffBase(null);
+        setPinnedLabel(`${commit.sha.slice(0, 7)}^ ${selectedVisit.node_id}`);
+        return;
+      }
+    }
+
     if (commit) {
-      const isBranch = !!selectedVisit.fan_out_node;
-      // For branch visits: file tree at fan_out^  (code being processed when branch ran)
-      // For main visits:   file tree at the commit itself
-      setPinnedRef(isBranch ? `${commit.sha}^` : commit.sha);
-      // Diff always shows what the commit itself introduced
+      setPinnedRef(commit.sha);
       setPinnedDiffRef(commit.sha);
-      // Label shows start..end range so the user sees which commits bound this visit
+      setPinnedDiffBase(null);
       const fullIndex = commits.indexOf(commit);
       const prevCommit = fullIndex > 0 ? commits[fullIndex - 1] : null;
       const startShort = prevCommit ? prevCommit.sha.slice(0, 7) : "root";
@@ -471,9 +536,10 @@ export function WorkspacePanel({ runId, isExecuting, selectedVisit, stageHistory
     } else {
       setPinnedRef(null);
       setPinnedDiffRef(null);
+      setPinnedDiffBase(null);
       setPinnedLabel(null);
     }
-  }, [selectedVisit, commits, stageHistory]);
+  }, [selectedVisit, commits, branches, stageHistory, runId]);
 
   const toggleDir = useCallback((path: string) => {
     setExpandedDirs((prev) => {
@@ -555,23 +621,27 @@ export function WorkspacePanel({ runId, isExecuting, selectedVisit, stageHistory
     return () => clearInterval(id);
   }, [runId, selectedPath, isExecuting, pinnedRef]);
 
-  const fetchDiff = useCallback(async (ref: string | null) => {
+  const fetchDiff = useCallback(async (ref: string | null, from: string | null) => {
     try {
-      const url = ref
-        ? `/api/runs/${runId}/workspace/commit-diff?ref=${encodeURIComponent(ref)}`
-        : `/api/runs/${runId}/workspace/diff`;
+      let url: string;
+      if (ref) {
+        url = `/api/runs/${runId}/workspace/commit-diff?ref=${encodeURIComponent(ref)}`;
+        if (from) url += `&from=${encodeURIComponent(from)}`;
+      } else {
+        url = `/api/runs/${runId}/workspace/diff`;
+      }
       const res = await fetch(url);
       if (res.ok) setFileDiffs(parseDiffByFile(await res.text()));
     } catch { /* ignore */ }
   }, [runId]);
 
-  // Fetch diff whenever pinnedDiffRef changes, and auto-refresh while executing in live mode
+  // Fetch diff whenever pinnedDiffRef/pinnedDiffBase changes, and auto-refresh while executing in live mode
   useEffect(() => {
-    fetchDiff(pinnedDiffRef);
+    fetchDiff(pinnedDiffRef, pinnedDiffBase);
     if (pinnedDiffRef || !isExecuting) return; // pinned = immutable; stop polling
-    const id = setInterval(() => fetchDiff(null), 4000);
+    const id = setInterval(() => fetchDiff(null, null), 4000);
     return () => clearInterval(id);
-  }, [fetchDiff, isExecuting, pinnedDiffRef]);
+  }, [fetchDiff, isExecuting, pinnedDiffRef, pinnedDiffBase]);
 
   // Auto-expand directories that contain changed files
   useEffect(() => {

@@ -996,7 +996,7 @@ export function DotPreview({
     }
   }, [scale, translate]);
 
-  // Auto-focus on a specific node: pan+zoom so the node fills ~25% of the viewport.
+  // Auto-focus on a specific node: zoom to 240% and center it.
   const prevFocusNode = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (!focusNode || focusNode === prevFocusNode.current) return;
@@ -1011,26 +1011,33 @@ export function DotPreview({
     ) as SVGGElement | undefined;
     if (!nodeG) return;
 
-    const nodeBBox = nodeG.getBBox();
-    const vb = svg.viewBox.baseVal;
+    // Use getBoundingClientRect to find where the node is on screen *right now*,
+    // then back-calculate its position in the SVG's untransformed pixel space.
+    const containerRect = container.getBoundingClientRect();
+    const nodeRect = nodeG.getBoundingClientRect();
+
+    // Node center in screen coordinates.
+    const nodeCxScreen = nodeRect.left + nodeRect.width / 2;
+    const nodeCyScreen = nodeRect.top + nodeRect.height / 2;
+
+    // Convert to container-local coordinates.
+    const nodeCxLocal = nodeCxScreen - containerRect.left;
+    const nodeCyLocal = nodeCyScreen - containerRect.top;
+
+    // Back out the current transform to get the node center at scale=1, translate=0.
+    // Current: screenPos = translate + pos * currentScale
+    // So: pos = (screenPos - translate) / currentScale
+    const nodeCxBase = (nodeCxLocal - translate.x) / scale;
+    const nodeCyBase = (nodeCyLocal - translate.y) / scale;
+
+    const targetScale = 2.4;
     const cw = container.clientWidth;
     const ch = container.clientHeight;
 
-    // SVG natural scale: how viewBox maps to the container at CSS scale=1.
-    const svgBaseScale = Math.min(cw / (vb.width || cw), ch / (vb.height || ch));
-
-    // Fixed 240% zoom.
-    const targetScale = 2.4;
-
-    // Node center in pixel space at scale=1.
-    const svgOffsetX = (cw - vb.width * svgBaseScale) / 2;
-    const svgOffsetY = (ch - vb.height * svgBaseScale) / 2;
-    const nodeCxPx = svgOffsetX + (nodeBBox.x + nodeBBox.width / 2 - vb.x) * svgBaseScale;
-    const nodeCyPx = svgOffsetY + (nodeBBox.y + nodeBBox.height / 2 - vb.y) * svgBaseScale;
-
-    // Center node in viewport.
-    const tx = cw / 2 - nodeCxPx * targetScale;
-    const ty = ch / 2 - nodeCyPx * targetScale;
+    // New transform: viewport_center = translate + pos * targetScale
+    // So: translate = viewport_center - pos * targetScale
+    const tx = cw / 2 - nodeCxBase * targetScale;
+    const ty = ch / 2 - nodeCyBase * targetScale;
 
     animatingFocus.current = true;
     setTransform({ scale: targetScale, x: tx, y: ty });

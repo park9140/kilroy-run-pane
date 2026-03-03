@@ -46,6 +46,10 @@ export function KilroyRunViewer() {
   const { runState, stages, stageHistory, dot, loading, error, connected } = useRunMonitor(runId);
   const [searchParams, setSearchParams] = useSearchParams();
 
+  // ?minimal=1 hides header + sidebars by default; click the expand button to toggle back.
+  const minimalParam = searchParams.get("minimal");
+  const [chrome, setChrome] = useState(() => minimalParam !== "1" && minimalParam !== "true");
+
   const [selectedHistoryIndex, setSelectedHistoryIndex] = useState<number | null>(null);
   const [hoveredHistoryIndex, setHoveredHistoryIndex] = useState<number | null>(null);
   // Node clicked but not yet in execution history (pending / not yet reached)
@@ -238,29 +242,31 @@ export function KilroyRunViewer() {
   return (
     <div className="flex flex-col h-screen bg-gray-950 text-gray-100">
       {/* Header */}
-      <div className="flex items-center gap-3 px-4 py-2 border-b border-gray-800 shrink-0 bg-gray-900/50">
-        <a href="/" className="text-gray-600 hover:text-gray-300 text-xs shrink-0" title="All runs">←</a>
-        <span className="text-xs font-mono text-gray-400 truncate max-w-xs" title={runId}>{runId}</span>
-        {runState && <StatusBadge status={runState.computedStatus} />}
-        {run?.dot_file && <span className="text-xs text-gray-500">{run.dot_file}</span>}
-        {run?.repo_path && (
-          <span className="text-xs text-gray-600 font-mono truncate max-w-xs" title={run.repo_path}>
-            {shortPath(run.repo_path)}
-          </span>
-        )}
-        {run?.last_heartbeat && <HeartbeatAge lastHeartbeat={run.last_heartbeat} />}
-        <div className="ml-auto flex items-center gap-2">
-          <span
-            className={`w-2 h-2 rounded-full ${connected ? "bg-green-500" : "bg-red-500"}`}
-            title={connected ? "Connected" : "Disconnected"}
-          />
-          {run?.failure_reason && !cycleInfo && (
-            <span className="text-xs text-red-400 truncate max-w-xs" title={run.failure_reason}>
-              {run.failure_reason}
+      {chrome && (
+        <div className="flex items-center gap-3 px-4 py-2 border-b border-gray-800 shrink-0 bg-gray-900/50">
+          <a href="/" className="text-gray-600 hover:text-gray-300 text-xs shrink-0" title="All runs">←</a>
+          <span className="text-xs font-mono text-gray-400 truncate max-w-xs" title={runId}>{runId}</span>
+          {runState && <StatusBadge status={runState.computedStatus} />}
+          {run?.dot_file && <span className="text-xs text-gray-500">{run.dot_file}</span>}
+          {run?.repo_path && (
+            <span className="text-xs text-gray-600 font-mono truncate max-w-xs" title={run.repo_path}>
+              {shortPath(run.repo_path)}
             </span>
           )}
+          {run?.last_heartbeat && <HeartbeatAge lastHeartbeat={run.last_heartbeat} />}
+          <div className="ml-auto flex items-center gap-2">
+            <span
+              className={`w-2 h-2 rounded-full ${connected ? "bg-green-500" : "bg-red-500"}`}
+              title={connected ? "Connected" : "Disconnected"}
+            />
+            {run?.failure_reason && !cycleInfo && (
+              <span className="text-xs text-red-400 truncate max-w-xs" title={run.failure_reason}>
+                {run.failure_reason}
+              </span>
+            )}
+          </div>
         </div>
-      </div>
+      )}
       {/* Cycle banner — yellow at n-1 warning, orange after failure */}
       {cycleVisible && cycleInfo && (
         <div className="shrink-0">
@@ -339,7 +345,7 @@ export function KilroyRunViewer() {
       {/* Body */}
       <div className="flex flex-1 min-h-0">
         {/* Left sidebar */}
-        {run && (
+        {chrome && run && (
           <StageSidebar
             run={run}
             stages={stages}
@@ -388,33 +394,45 @@ export function KilroyRunViewer() {
         </div>
 
         {/* Right panel: stage details (slide-in) */}
-        <div
-          className={`h-full overflow-hidden transition-all duration-200 ease-in-out ${
-            panelOpen ? "translate-x-0" : "translate-x-full w-0"
-          }`}
-        >
-          {run && selectedHistoryIndex != null && (
-            <StageDetailPanel
-              run={run}
-              stageHistory={stageHistory}
-              selectedHistoryIndex={selectedHistoryIndex}
-              onSelectVisit={(idx) => { userClosedRef.current = false; setSelectedHistoryIndex(idx); setPendingNodeId(null); writeSelectedToUrl(idx); }}
-              onClose={() => { userClosedRef.current = true; setSelectedHistoryIndex(null); setPendingNodeId(null); clearSelectionFromUrl(); }}
-              dot={dot}
-              nodeLabels={nodeLabels}
-            />
-          )}
-          {pendingNodeId && selectedHistoryIndex == null && (
-            <NodeDetailPanel
-              nodeId={pendingNodeId}
-              nodeLabel={nodeLabels.get(pendingNodeId) ?? pendingNodeId}
-              dot={dot ?? ""}
-              onClose={() => { userClosedRef.current = true; setPendingNodeId(null); clearSelectionFromUrl(); }}
-              editable={false}
-            />
-          )}
-        </div>
+        {chrome && (
+          <div
+            className={`h-full overflow-hidden transition-all duration-200 ease-in-out ${
+              panelOpen ? "translate-x-0" : "translate-x-full w-0"
+            }`}
+          >
+            {run && selectedHistoryIndex != null && (
+              <StageDetailPanel
+                run={run}
+                stageHistory={stageHistory}
+                selectedHistoryIndex={selectedHistoryIndex}
+                onSelectVisit={(idx) => { userClosedRef.current = false; setSelectedHistoryIndex(idx); setPendingNodeId(null); writeSelectedToUrl(idx); }}
+                onClose={() => { userClosedRef.current = true; setSelectedHistoryIndex(null); setPendingNodeId(null); clearSelectionFromUrl(); }}
+                dot={dot}
+                nodeLabels={nodeLabels}
+              />
+            )}
+            {pendingNodeId && selectedHistoryIndex == null && (
+              <NodeDetailPanel
+                nodeId={pendingNodeId}
+                nodeLabel={nodeLabels.get(pendingNodeId) ?? pendingNodeId}
+                dot={dot ?? ""}
+                onClose={() => { userClosedRef.current = true; setPendingNodeId(null); clearSelectionFromUrl(); }}
+                editable={false}
+              />
+            )}
+          </div>
+        )}
 
+        {/* Minimal mode toggle */}
+        {!chrome && (
+          <button
+            onClick={() => setChrome(true)}
+            className="absolute top-2 left-2 z-20 text-gray-600 hover:text-gray-300 bg-gray-900/80 hover:bg-gray-800 border border-gray-800 rounded px-2 py-1 text-xs transition-colors"
+            title="Show header and sidebars"
+          >
+            ☰
+          </button>
+        )}
       </div>
     </div>
   );

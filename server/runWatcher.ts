@@ -14,6 +14,7 @@ export type ComputedStatus = "executing" | "stalled" | "completed" | "failed" | 
 export interface RunRecord {
   id: string;
   repo?: string;
+  repo_path?: string;
   dot_file?: string;
   status?: RunStatus;
   current_node?: string;
@@ -47,7 +48,7 @@ export interface StageInfo {
 export interface VisitedStage {
   node_id: string;
   attempt: number;
-  status: "pass" | "fail" | "running";
+  status: "pass" | "fail" | "running" | "interrupted";
   started_at: string;
   finished_at?: string;
   duration_s?: number;
@@ -184,10 +185,15 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
     const worktreePath = typeof manifest.worktree === "string" ? manifest.worktree : undefined;
     const repo = repoPath ? repoPath.split("/").pop() : undefined;
 
-    // Read DOT content
+    // Read DOT content — try manifest path first, then fall back to graph.dot
+    // in the run directory (the manifest path may reference the original container's
+    // mount point which differs from our volume mount).
     let dot: string | undefined;
     if (graphDotPath) {
       try { dot = await readFile(graphDotPath, "utf8"); } catch { /* ignore */ }
+    }
+    if (!dot) {
+      try { dot = await readFile(join(runDir, "graph.dot"), "utf8"); } catch { /* ignore */ }
     }
 
     // Walk restart chain: [runDir, restart-1, restart-2, ...]

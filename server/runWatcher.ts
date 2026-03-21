@@ -218,21 +218,10 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
       } catch { /* try next */ }
     }
 
-    // Read final.json from latest dir first, fall back to root
-    let finalStatus: "completed" | "failed" | undefined;
-    let failureReason: string | undefined;
-    let finishedAt: string | undefined;
-    for (const dir of [latestDir, runDir]) {
-      try {
-        const finalRaw = await readFile(join(dir, "final.json"), "utf8");
-        const final: Record<string, unknown> = JSON.parse(finalRaw);
-        const s = String(final.status ?? "");
-        if (s === "success") finalStatus = "completed";
-        else if (s === "fail") finalStatus = "failed";
-        failureReason = typeof final.failure_reason === "string" ? final.failure_reason : undefined;
-        finishedAt = typeof final.timestamp === "string" ? final.timestamp : undefined;
-        break;
-      } catch { /* try next */ }
+    const { readRunArtifactStatus } = await import("./runStatus.js");
+    let artifactStatus = await readRunArtifactStatus(latestDir);
+    if (artifactStatus.status === "running" && latestDir !== runDir) {
+      artifactStatus = await readRunArtifactStatus(runDir);
     }
 
     // Get last heartbeat from latest dir's progress.ndjson
@@ -274,8 +263,8 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
     let status: RunStatus;
     if (containerAlive) {
       status = "executing";
-    } else if (finalStatus) {
-      status = finalStatus;
+    } else if (artifactStatus.status !== "running") {
+      status = artifactStatus.status;
     } else if (hasCheckpoint) {
       status = "interrupted";
     } else {
@@ -312,7 +301,7 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
     // These are stages that received a start event but no end event because the
     // process was killed.  Showing them as pulsing "running" on a finished run
     // is misleading; "interrupted" communicates what actually happened.
-    if (!containerAlive && finalStatus) {
+    if (!containerAlive && artifactStatus.status !== "running") {
       for (const v of stageHistory) {
         if (v.status === "running") v.status = "interrupted";
       }
@@ -334,9 +323,9 @@ async function readAttractorFormat(runId: string, runDir: string): Promise<RunSt
       status,
       current_node: currentNode,
       started_at: startedAt,
-      finished_at: finishedAt,
+      finished_at: artifactStatus.finishedAt,
       last_heartbeat: lastHeartbeat ?? checkpointTs,
-      failure_reason: failureReason,
+      failure_reason: artifactStatus.failureReason,
       attractor_run_id: runId,
       attractor_logs_root: logsRoot,
       has_checkpoint: hasCheckpoint,

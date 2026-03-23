@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { RunState, StageInfo, VisitedStage, ComputedStatus } from "../lib/types";
+import { apiUrl } from "../lib/embeddedBase";
 
 interface RunMonitorState {
   runState: RunState | null;
@@ -47,7 +48,7 @@ export function useRunMonitor(runId: string | undefined): RunMonitorState {
       esRef.current = null;
     }
 
-    const es = new EventSource(`/api/runs/${encodeURIComponent(id)}/events`);
+    const es = new EventSource(apiUrl(`/api/runs/${encodeURIComponent(id)}/events`));
     esRef.current = es;
 
     es.onopen = () => {

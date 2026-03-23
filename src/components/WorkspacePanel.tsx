@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Components } from "react-markdown";
 import type { VisitedStage } from "../lib/types";
+import { apiUrl } from "../lib/embeddedBase";
 
 interface WorkspaceFile {
   path: string;
@@ -439,11 +440,11 @@ export function WorkspacePanel({ runId, isExecuting, selectedVisit, stageHistory
 
   // Fetch all run-scoped commits and branch refs once
   useEffect(() => {
-    fetch(`/api/runs/${runId}/workspace/commits`)
+    fetch(apiUrl(`/api/runs/${runId}/workspace/commits`))
       .then((r) => r.ok ? r.json() : [])
       .then((data: CommitInfo[]) => setCommits(data))
       .catch(() => {});
-    fetch(`/api/runs/${runId}/workspace/branches`)
+    fetch(apiUrl(`/api/runs/${runId}/workspace/branches`))
       .then((r) => r.ok ? r.json() : [])
       .then((data: BranchInfo[]) => setBranches(data))
       .catch(() => {});
@@ -553,8 +554,8 @@ export function WorkspacePanel({ runId, isExecuting, selectedVisit, stageHistory
   const fetchFiles = useCallback(async (ref: string | null) => {
     try {
       const url = ref
-        ? `/api/runs/${runId}/workspace?ref=${encodeURIComponent(ref)}`
-        : `/api/runs/${runId}/workspace`;
+        ? apiUrl(`/api/runs/${runId}/workspace?ref=${encodeURIComponent(ref)}`)
+        : apiUrl(`/api/runs/${runId}/workspace`);
       const res = await fetch(url);
       if (!res.ok) {
         if (res.status === 404) { setError("No worktree available for this run."); return; }
@@ -600,7 +601,7 @@ export function WorkspacePanel({ runId, isExecuting, selectedVisit, stageHistory
     if (!selectedPath) { setFileContent(null); return; }
     setLoadingContent(true);
     const refPart = pinnedRef ? `&ref=${encodeURIComponent(pinnedRef)}` : "";
-    fetch(`/api/runs/${runId}/workspace/file?path=${encodeURIComponent(selectedPath)}${refPart}`)
+    fetch(apiUrl(`/api/runs/${runId}/workspace/file?path=${encodeURIComponent(selectedPath)}${refPart}`))
       .then((r) => {
         if (!r.ok) throw new Error(`${r.status}`);
         return r.text();
@@ -614,7 +615,7 @@ export function WorkspacePanel({ runId, isExecuting, selectedVisit, stageHistory
     if (!isExecuting || !selectedPath || pinnedRef) return;
     const id = setInterval(async () => {
       try {
-        const r = await fetch(`/api/runs/${runId}/workspace/file?path=${encodeURIComponent(selectedPath)}`);
+        const r = await fetch(apiUrl(`/api/runs/${runId}/workspace/file?path=${encodeURIComponent(selectedPath)}`));
         if (r.ok) setFileContent(await r.text());
       } catch { /* ok */ }
     }, 4000);
@@ -625,10 +626,10 @@ export function WorkspacePanel({ runId, isExecuting, selectedVisit, stageHistory
     try {
       let url: string;
       if (ref) {
-        url = `/api/runs/${runId}/workspace/commit-diff?ref=${encodeURIComponent(ref)}`;
+        url = apiUrl(`/api/runs/${runId}/workspace/commit-diff?ref=${encodeURIComponent(ref)}`);
         if (from) url += `&from=${encodeURIComponent(from)}`;
       } else {
-        url = `/api/runs/${runId}/workspace/diff`;
+        url = apiUrl(`/api/runs/${runId}/workspace/diff`);
       }
       const res = await fetch(url);
       if (res.ok) setFileDiffs(parseDiffByFile(await res.text()));
@@ -678,13 +679,13 @@ export function WorkspacePanel({ runId, isExecuting, selectedVisit, stageHistory
   }, [selectedPath, fileDiffs]);
 
   const handleReveal = () => {
-    fetch(`/api/runs/${runId}/workspace/reveal`, { method: "POST" }).catch(() => {});
+    fetch(apiUrl(`/api/runs/${runId}/workspace/reveal`), { method: "POST" }).catch(() => {});
   };
 
   const handleDownload = async () => {
     setDownloading(true);
     try {
-      const res = await fetch(`/api/runs/${runId}/workspace/download`);
+      const res = await fetch(apiUrl(`/api/runs/${runId}/workspace/download`));
       if (!res.ok) throw new Error(`${res.status}`);
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);

@@ -3,12 +3,13 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { KilroyRunViewer } from "./components/KilroyRunViewer";
 import { DotDropOverlay } from "./components/DotDropOverlay";
+import { apiUrl, appUrl, routerBasename } from "./lib/embeddedBase";
 import "./index.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <DotDropOverlay>
-      <BrowserRouter>
+      <BrowserRouter basename={routerBasename()}>
         <Routes>
           <Route path="/run/:runId" element={<KilroyRunViewer />} />
           <Route path="/" element={<RunPicker />} />
@@ -84,7 +85,7 @@ function RunList() {
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
-    fetch("/api/runs/summaries")
+    fetch(apiUrl("/api/runs/summaries"))
       .then((r) => r.json())
       .then((d: { runs?: RunSummary[] }) => {
         // Sort by started_at desc (fall back to id order which is ULID time-ordered)
@@ -149,7 +150,7 @@ function RunList() {
         return (
           <a
             key={run.id}
-            href={`/run/${run.id}`}
+            href={appUrl(`/run/${run.id}`)}
             className="block px-4 py-3 bg-gray-900 border border-gray-800 rounded hover:bg-gray-800/80 hover:border-gray-700 transition-colors"
           >
             <div className="flex items-start gap-3">

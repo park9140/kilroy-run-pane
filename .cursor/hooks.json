@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "node ../../../scripts/agent-rules/remind-sync.mjs"
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": "node ../../../scripts/agent-rules/remind-sync.mjs"
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "node ../../../scripts/agent-rules/remind-sync.mjs"
+      }
+    ]
+  }
+}

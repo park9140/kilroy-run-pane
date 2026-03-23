@@ -5,6 +5,7 @@ import { FileVisualizer } from "./FileVisualizers";
 import { TurnViewer } from "./TurnViewer";
 import { WorkspacePanel } from "./WorkspacePanel";
 import { useResizablePanel, resizeHandleClass } from "../hooks/useResizablePanel";
+import { apiUrl } from "../lib/embeddedBase";
 
 interface Props {
   run: RunRecord;
@@ -128,7 +129,7 @@ const EMPTY_STAGE_FILES: StageFiles = {
 
 async function fetchStageFiles(runId: string, stagePath: string): Promise<StageFiles> {
   try {
-    const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/stages/${stagePath}`);
+    const res = await fetch(apiUrl(`/api/runs/${encodeURIComponent(runId)}/stages/${stagePath}`));
     if (!res.ok) return EMPTY_STAGE_FILES;
     const data = await res.json() as Record<string, unknown>;
     const files: string[] = Array.isArray(data.files) ? (data.files as string[]) : [];
@@ -147,14 +148,14 @@ async function fetchStageFiles(runId: string, stagePath: string): Promise<StageF
 
 async function fetchFileContent(runId: string, stagePath: string, fileName: string): Promise<string> {
   const res = await fetch(
-    `/api/runs/${encodeURIComponent(runId)}/stages/${stagePath}/${encodeURIComponent(fileName)}`
+    apiUrl(`/api/runs/${encodeURIComponent(runId)}/stages/${stagePath}/${encodeURIComponent(fileName)}`)
   );
   if (!res.ok) throw new Error(`${res.status}`);
   return res.text();
 }
 
 async function fetchTurns(runId: string, stagePath: string): Promise<TurnsData> {
-  const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/stages/${stagePath}/turns`);
+  const res = await fetch(apiUrl(`/api/runs/${encodeURIComponent(runId)}/stages/${stagePath}/turns`));
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json();
 }

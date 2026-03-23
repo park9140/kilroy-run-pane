@@ -2,6 +2,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { RunWatcher } from "./runWatcher.js";
+import { registerFactoryRoutes } from "./factory.js";
 import { registerRoutes } from "./routes.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
@@ -43,8 +44,13 @@ registerRoutes(app, {
   watcher,
 });
 
-const server = app.listen(PORT, () => {
-  console.log(`[kilroy-run-pane] Listening on http://localhost:${PORT}`);
+const projectRoot = resolve(process.env.KILROY_PROJECT_ROOT ?? "/workspace/project");
+registerFactoryRoutes(app, { runsDirs: KILROY_RUNS_DIRS, projectRoot });
+
+const BIND_HOST = process.env.RUN_PANE_BIND ?? "0.0.0.0";
+
+const server = app.listen(PORT, BIND_HOST, () => {
+  console.log(`[kilroy-run-pane] Listening on http://${BIND_HOST}:${PORT}`);
   console.log(`[kilroy-run-pane] Runs dirs:`);
   for (const d of KILROY_RUNS_DIRS) console.log(`[kilroy-run-pane]   - ${d}`);
 });

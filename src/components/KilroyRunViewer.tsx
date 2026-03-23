@@ -7,6 +7,7 @@ import { StageDetailPanel } from "./StageDetailPanel";
 import { NodeDetailPanel } from "./NodeDetailPanel";
 import type { ComputedStatus } from "../lib/types";
 import { parseAllNodeLabels } from "../lib/dotUtils";
+import { appUrl } from "../lib/embeddedBase";
 
 function shortPath(p: string): string {
   const parts = p.split("/").filter(Boolean);
@@ -244,7 +245,7 @@ export function KilroyRunViewer() {
       {/* Header */}
       {chrome && (
         <div className="flex items-center gap-3 px-4 py-2 border-b border-gray-800 shrink-0 bg-gray-900/50">
-          <a href="/" className="text-gray-600 hover:text-gray-300 text-xs shrink-0" title="All runs">←</a>
+          <a href={appUrl("/")} className="text-gray-600 hover:text-gray-300 text-xs shrink-0" title="All runs">←</a>
           <span className="text-xs font-mono text-gray-400 truncate max-w-xs" title={runId}>{runId}</span>
           {runState && <StatusBadge status={runState.computedStatus} />}
           {run?.dot_file && <span className="text-xs text-gray-500">{run.dot_file}</span>}

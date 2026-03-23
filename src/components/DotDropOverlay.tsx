@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } fro
 import { DotPreview } from "./DotPreview";
 import { NodeDetailPanel } from "./NodeDetailPanel";
 import { parseAllNodeLabels, updateNodeAttr } from "../lib/dotUtils";
+import { apiUrl } from "../lib/embeddedBase";
 
 interface DotDropOverlayProps {
   children: ReactNode;
@@ -102,7 +103,7 @@ export function DotDropOverlay({ children }: DotDropOverlayProps) {
     setSelectedNode(null);
     setEditingEnabled(false);
     fileHandleRef.current = null;
-    fetch(`/api/local-file?path=${encodeURIComponent(filePath)}`)
+    fetch(apiUrl(`/api/local-file?path=${encodeURIComponent(filePath)}`))
       .then((r) => { if (!r.ok) throw new Error(r.statusText); return r.text(); })
       .then((text) => {
         setDotContent(text);

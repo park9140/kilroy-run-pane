@@ -6,9 +6,10 @@
 
 ## Key Files
 
+- `AGENTS.md`: authored directory rules for this scope
 - `dotUtils.ts`: TypeScript source in this directory's local surface area
+- `embeddedBase.ts`: TypeScript source in this directory's local surface area
 - `fileFingerprint.ts`: TypeScript source in this directory's local surface area
-- `types.ts`: TypeScript source in this directory's local surface area
 
 ## Testing
 

@@ -6,6 +6,7 @@
 
 ## Key Files
 
+- `AGENTS.md`: authored directory rules for this scope
 - `INTEGRATION.md`: local markdown documentation or planning context
 - `KilroyRunPane.tsx`: TypeScript source in this directory's local surface area
 - `KilroyRunPaneContent.ts`: TypeScript source in this directory's local surface area

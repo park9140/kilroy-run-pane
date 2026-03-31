@@ -13,6 +13,7 @@
 ## Key Files
 
 - `main.tsx`: frontend bootstrap entrypoint
+- `AGENTS.md`: authored directory rules for this scope
 - `index.css`: tracked file that anchors this directory's workflow
 
 ## Testing

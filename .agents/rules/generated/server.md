@@ -13,9 +13,9 @@
 ## Key Files
 
 - `index.ts`: local TypeScript entrypoint
-- `pidCheck.ts`: TypeScript source in this directory's local surface area
-- `routes.ts`: TypeScript source in this directory's local surface area
-- `runWatcher.ts`: TypeScript source in this directory's local surface area
+- `AGENTS.md`: authored directory rules for this scope
+- `checkpointRepair.ts`: TypeScript source in this directory's local surface area
+- `factory.ts`: TypeScript source in this directory's local surface area
 
 ## Testing
 

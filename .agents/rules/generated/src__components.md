@@ -12,10 +12,10 @@
 
 ## Key Files
 
+- `AGENTS.md`: authored directory rules for this scope
 - `DotDropOverlay.tsx`: TypeScript source in this directory's local surface area
 - `DotPreview.tsx`: TypeScript source in this directory's local surface area
 - `FileVisualizers.tsx`: TypeScript source in this directory's local surface area
-- `KilroyRunViewer.tsx`: TypeScript source in this directory's local surface area
 
 ## Testing
 

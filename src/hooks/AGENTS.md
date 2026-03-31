@@ -6,6 +6,7 @@
 
 ## Key Files
 
+- `AGENTS.md`: authored directory rules for this scope
 - `useResizablePanel.ts`: TypeScript source in this directory's local surface area
 - `useRunMonitor.ts`: TypeScript source in this directory's local surface area
 

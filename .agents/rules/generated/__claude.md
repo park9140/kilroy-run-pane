@@ -12,6 +12,7 @@
 
 ## Key Files
 
+- `AGENTS.md`: authored directory rules for this scope
 - `settings.json`: tooling configuration for the owning agent/runtime
 
 ## Testing

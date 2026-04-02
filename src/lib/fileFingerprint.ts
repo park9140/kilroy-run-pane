@@ -244,7 +244,7 @@ export function fingerprintJsonContent(text: string, fileName = ""): JsonSubtype
       if ((keys.has("id") || keys.has("run_id")) && keys.has("dot_file") && keys.has("repo") && keys.has("started_at") && keys.has("status")) {
         return "run_record";
       }
-      if (["version", "repo", "cxdb", "llm", "modeldb", "git", "setup", "runtime_policy", "preflight"].every((k) => keys.has(k))) {
+      if (["version", "repo", "llm", "modeldb", "git", "runtime_policy", "preflight"].every((k) => keys.has(k))) {
         return "run_config";
       }
       if (keys.has("files_changed") && keys.has("harvested") && keys.has("node_id")) return "partial_status";

@@ -154,6 +154,14 @@ async function fetchFileContent(runId: string, stagePath: string, fileName: stri
   return res.text();
 }
 
+async function fetchWorkspaceFileContent(runId: string, filePath: string): Promise<string> {
+  const res = await fetch(
+    apiUrl(`/api/runs/${encodeURIComponent(runId)}/workspace/file?path=${encodeURIComponent(filePath)}`)
+  );
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.text();
+}
+
 async function fetchTurns(runId: string, stagePath: string): Promise<TurnsData> {
   const res = await fetch(apiUrl(`/api/runs/${encodeURIComponent(runId)}/stages/${stagePath}/turns`));
   if (!res.ok) throw new Error(`${res.status}`);
@@ -440,6 +448,24 @@ function LLMNodeContent({
 
 type ToolTab = "output" | "workspace";
 
+const TOOL_SUITE_LOGS: Record<string, { suiteLog: string; failureLog?: string; label: string }> = {
+  run_jest: {
+    suiteLog: ".kilroy/jest-output.txt",
+    failureLog: ".kilroy/failure-log.md",
+    label: "Jest suite log",
+  },
+  run_karma: {
+    suiteLog: ".kilroy/karma-output.txt",
+    failureLog: ".kilroy/failure-log.md",
+    label: "Karma suite log",
+  },
+  run_cypress: {
+    suiteLog: ".kilroy/cypress-output.txt",
+    failureLog: ".kilroy/failure-log.md",
+    label: "Cypress suite log",
+  },
+};
+
 function ToolNodeContent({
   run, stagePath, stageFiles, dotAttrs, isRunning, visit, stageHistory,
 }: {
@@ -463,31 +489,68 @@ function ToolNodeContent({
   const [toolInv, setToolInv] = useState<Record<string, unknown> | null>(null);
   const [stdout, setStdout] = useState<string | null>(null);
   const [stderr, setStderr] = useState<string | null>(null);
+  const [suiteLog, setSuiteLog] = useState<string | null>(null);
+  const [failureLog, setFailureLog] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const suiteLogConfig = TOOL_SUITE_LOGS[visit.node_id];
 
   useEffect(() => {
+    let cancelled = false;
     const tasks: Promise<void>[] = [];
     if (stageFiles.files.includes("tool_invocation.json")) {
       tasks.push(
         fetchFileContent(run.id, stagePath, "tool_invocation.json")
-          .then((t) => { try { setToolInv(JSON.parse(t)); } catch { /* ignore */ } })
+          .then((t) => {
+            if (cancelled) return;
+            try { setToolInv(JSON.parse(t)); } catch { /* ignore */ }
+          })
           .catch(() => { /* ignore */ })
       );
     }
     if (stageFiles.files.includes("stdout.log")) {
       tasks.push(
         fetchFileContent(run.id, stagePath, "stdout.log")
-          .then(setStdout).catch(() => { /* ignore */ })
+          .then((t) => { if (!cancelled) setStdout(t); }).catch(() => { /* ignore */ })
       );
     }
     if (stageFiles.files.includes("stderr.log")) {
       tasks.push(
         fetchFileContent(run.id, stagePath, "stderr.log")
-          .then((t) => setStderr(t.trim() ? t : null)).catch(() => { /* ignore */ })
+          .then((t) => { if (!cancelled) setStderr(t.trim() ? t : null); }).catch(() => { /* ignore */ })
       );
     }
+    if (suiteLogConfig) {
+      tasks.push(
+        fetchWorkspaceFileContent(run.id, suiteLogConfig.suiteLog)
+          .then((t) => { if (!cancelled) setSuiteLog(t.trim() ? t : null); })
+          .catch(() => { if (!cancelled) setSuiteLog(null); })
+      );
+      if (suiteLogConfig.failureLog) {
+        tasks.push(
+          fetchWorkspaceFileContent(run.id, suiteLogConfig.failureLog)
+            .then((t) => { if (!cancelled) setFailureLog(t.trim() ? t : null); })
+            .catch(() => { if (!cancelled) setFailureLog(null); })
+        );
+      }
+    }
     Promise.all(tasks).finally(() => setLoading(false));
-  }, [run.id, stagePath, stageFiles.files]);
+    return () => { cancelled = true; };
+  }, [run.id, stagePath, stageFiles.files, suiteLogConfig]);
+
+  useEffect(() => {
+    if (!suiteLogConfig || !isRunning) return;
+    const id = setInterval(() => {
+      fetchWorkspaceFileContent(run.id, suiteLogConfig.suiteLog)
+        .then((t) => setSuiteLog(t.trim() ? t : null))
+        .catch(() => { /* ignore */ });
+      if (suiteLogConfig.failureLog) {
+        fetchWorkspaceFileContent(run.id, suiteLogConfig.failureLog)
+          .then((t) => setFailureLog(t.trim() ? t : null))
+          .catch(() => setFailureLog(null));
+      }
+    }, 2500);
+    return () => clearInterval(id);
+  }, [run.id, isRunning, suiteLogConfig]);
 
   const command = typeof toolInv?.command === "string" ? toolInv.command
     : typeof toolInv?.argv === "string" ? toolInv.argv
@@ -524,7 +587,7 @@ function ToolNodeContent({
       </div>
 
       {tab === "output" && (
-        loading && !command && !stdout ? (
+        loading && !command && !stdout && !suiteLog ? (
           <div className="flex-1 p-3 text-xs text-gray-500">Loading…</div>
         ) : (
           <div className="flex-1 overflow-auto p-3 space-y-4">
@@ -553,6 +616,17 @@ function ToolNodeContent({
               <div className="text-xs text-gray-600 italic">No output captured.</div>
             ) : null}
 
+            {suiteLog ? (
+              <div>
+                <SectionLabel>{suiteLogConfig?.label ?? "Suite log"}</SectionLabel>
+                <FileVisualizer
+                  fileName={suiteLogConfig?.suiteLog?.split("/").pop() ?? "suite-output.txt"}
+                  mime="text/plain"
+                  content={suiteLog}
+                />
+              </div>
+            ) : null}
+
             {/* Errors: stderr (only if non-empty) */}
             {stderr && (
               <div>
@@ -562,6 +636,13 @@ function ToolNodeContent({
                 <FileVisualizer fileName="stderr.log" mime="text/plain" content={stderr} />
               </div>
             )}
+
+            {failureLog ? (
+              <div>
+                <SectionLabel>Failure log</SectionLabel>
+                <FileVisualizer fileName="failure-log.md" mime="text/markdown" content={failureLog} />
+              </div>
+            ) : null}
           </div>
         )
       )}

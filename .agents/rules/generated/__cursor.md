@@ -12,6 +12,7 @@
 
 ## Key Files
 
+- `AGENTS.md`: authored directory rules for this scope
 - `hooks.json`: agent hook wiring for reminders or automation
 
 ## Testing

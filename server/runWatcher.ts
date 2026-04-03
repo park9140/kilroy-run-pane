@@ -83,6 +83,26 @@ export interface RunState {
   format: "kilroy-dash" | "attractor";
 }
 
+export interface ProgressWebhookSubscription {
+  id: string;
+  runId: string;
+  webhookUrl: string;
+  authToken?: string;
+  threadId?: string;
+  dashboardRunId?: string;
+  createdAt: string;
+  lastDeliveryDigest?: string;
+  lastDeliveredAt?: string;
+  lastError?: string;
+}
+
+export interface ProgressWebhookSubscriptionInput {
+  webhookUrl: string;
+  authToken?: string;
+  threadId?: string;
+  dashboardRunId?: string;
+}
+
 function deriveComputedStatus(run: RunRecord, containerAlive: boolean): ComputedStatus {
   switch (run.status) {
     case "completed": return "completed";
@@ -91,6 +111,124 @@ function deriveComputedStatus(run: RunRecord, containerAlive: boolean): Computed
     case "executing": return containerAlive ? "executing" : "stalled";
     default: return "unknown";
   }
+}
+
+function latestVisitedStage(state: RunState): VisitedStage | undefined {
+  if (Array.isArray(state.stageHistory) && state.stageHistory.length > 0) {
+    return state.stageHistory[state.stageHistory.length - 1];
+  }
+  return undefined;
+}
+
+function summarizeRunProgress(state: RunState): string {
+  const runLabel = state.run.id;
+  const status = state.computedStatus || state.run.status || "unknown";
+  const latest = latestVisitedStage(state);
+  if (latest?.status === "running") {
+    return `Run ${runLabel} is ${status} at stage ${latest.node_id}.`;
+  }
+  if (latest) {
+    return `Run ${runLabel} is ${status}; latest stage ${latest.node_id} finished ${latest.status}.`;
+  }
+  if (state.run.current_node) {
+    return `Run ${runLabel} is ${status} at stage ${state.run.current_node}.`;
+  }
+  return `Run ${runLabel} is ${status}.`;
+}
+
+function buildProgressDigest(state: RunState): string {
+  const latest = latestVisitedStage(state);
+  return JSON.stringify({
+    computedStatus: state.computedStatus,
+    runStatus: state.run.status ?? "",
+    currentNode: state.run.current_node ?? "",
+    finishedAt: state.run.finished_at ?? "",
+    lastHeartbeat: state.run.last_heartbeat ?? "",
+    stageHistoryCount: state.stageHistory?.length ?? 0,
+    latestStage: latest
+      ? {
+        nodeId: latest.node_id,
+        attempt: latest.attempt,
+        status: latest.status,
+        finishedAt: latest.finished_at ?? "",
+        restartIndex: latest.restartIndex ?? 0,
+      }
+      : null,
+  });
+}
+
+async function deliverProgressWebhook(
+  sub: ProgressWebhookSubscription,
+  state: RunState,
+): Promise<void> {
+  const digest = buildProgressDigest(state);
+  if (sub.lastDeliveryDigest === digest) return;
+
+  const latest = latestVisitedStage(state);
+  const payload = {
+    event_type: "run_progress",
+    sent_at: new Date().toISOString(),
+    delivery_id: digest,
+    run_id: sub.dashboardRunId || state.run.id,
+    dashboard_run_id: sub.dashboardRunId || undefined,
+    attractor_run_id: state.run.id,
+    thread_id: sub.threadId || undefined,
+    summary: summarizeRunProgress(state),
+    computed_status: state.computedStatus,
+    run_status: state.run.status ?? null,
+    current_node: state.run.current_node ?? null,
+    container_alive: state.containerAlive,
+    latest_stage: latest
+      ? {
+        node_id: latest.node_id,
+        attempt: latest.attempt,
+        status: latest.status,
+        started_at: latest.started_at,
+        finished_at: latest.finished_at ?? null,
+        duration_s: latest.duration_s ?? null,
+        branch_key: latest.branch_key ?? null,
+        fan_out_node: latest.fan_out_node ?? null,
+        restart_index: latest.restartIndex ?? null,
+      }
+      : null,
+    run_url: `/runs/${sub.dashboardRunId || state.run.id}`,
+  };
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  };
+  if (sub.authToken) {
+    headers["Authorization"] = `Bearer ${sub.authToken}`;
+  }
+
+  const response = await fetch(sub.webhookUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`webhook ${response.status}: ${text || response.statusText}`);
+  }
+  sub.lastDeliveryDigest = digest;
+  sub.lastDeliveredAt = new Date().toISOString();
+  delete sub.lastError;
+}
+
+function createProgressWebhookSubscription(
+  runId: string,
+  input: ProgressWebhookSubscriptionInput,
+): ProgressWebhookSubscription {
+  return {
+    id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    runId,
+    webhookUrl: input.webhookUrl.trim(),
+    authToken: input.authToken?.trim() || undefined,
+    threadId: input.threadId?.trim() || undefined,
+    dashboardRunId: input.dashboardRunId?.trim() || undefined,
+    createdAt: new Date().toISOString(),
+  };
 }
 
 // Check if a PID is alive on the host
@@ -536,6 +674,8 @@ export class RunWatcher extends EventEmitter {
   private polling = new Map<string, ReturnType<typeof setInterval>>();
   // Reference-count of active SSE connections per run — watcher is torn down at 0.
   private sseRefs = new Map<string, number>();
+  private webhookRefs = new Map<string, number>();
+  private progressWebhooks = new Map<string, Map<string, ProgressWebhookSubscription>>();
 
   constructor(runsDirs: string[]) {
     super();
@@ -575,8 +715,84 @@ export class RunWatcher extends EventEmitter {
   async watch(runId: string): Promise<RunState | null> {
     // Increment SSE ref count
     this.sseRefs.set(runId, (this.sseRefs.get(runId) ?? 0) + 1);
+    return this.ensureWatching(runId);
+  }
 
-    // If already watching, return cached state
+  /** Called when an SSE connection closes. Tears down the watcher when all clients disconnect. */
+  sseDisconnect(runId: string) {
+    const refs = (this.sseRefs.get(runId) ?? 1) - 1;
+    if (refs <= 0) {
+      this.sseRefs.delete(runId);
+      if (this.totalRefs(runId) <= 0) {
+        this.unwatch(runId);
+      }
+    } else {
+      this.sseRefs.set(runId, refs);
+    }
+  }
+
+  listProgressWebhooks(runId: string): ProgressWebhookSubscription[] {
+    const perRun = this.progressWebhooks.get(runId);
+    if (!perRun) return [];
+    return [...perRun.values()].map((sub) => ({ ...sub }));
+  }
+
+  async subscribeProgressWebhook(
+    runId: string,
+    input: ProgressWebhookSubscriptionInput,
+  ): Promise<ProgressWebhookSubscription | null> {
+    const runDir = await this.findRunDir(runId);
+    if (!runDir) return null;
+
+    const subscription = createProgressWebhookSubscription(runId, input);
+    let perRun = this.progressWebhooks.get(runId);
+    if (!perRun) {
+      perRun = new Map<string, ProgressWebhookSubscription>();
+      this.progressWebhooks.set(runId, perRun);
+    }
+    const existing = [...perRun.values()].find((sub) =>
+      sub.webhookUrl === input.webhookUrl.trim()
+      && (sub.threadId ?? "") === (input.threadId?.trim() ?? "")
+      && (sub.dashboardRunId ?? "") === (input.dashboardRunId?.trim() ?? "")
+    );
+    if (existing) {
+      return { ...existing };
+    }
+    perRun.set(subscription.id, subscription);
+    this.webhookRefs.set(runId, (this.webhookRefs.get(runId) ?? 0) + 1);
+
+    const state = await this.ensureWatching(runId);
+    if (state) {
+      void this.dispatchProgressWebhooks(runId, state);
+    }
+    return { ...subscription };
+  }
+
+  unsubscribeProgressWebhook(runId: string, subscriptionId: string): boolean {
+    const perRun = this.progressWebhooks.get(runId);
+    if (!perRun) return false;
+    const removed = perRun.delete(subscriptionId);
+    if (!removed) return false;
+    if (perRun.size === 0) {
+      this.progressWebhooks.delete(runId);
+    }
+    const refs = (this.webhookRefs.get(runId) ?? 1) - 1;
+    if (refs <= 0) {
+      this.webhookRefs.delete(runId);
+      if (this.totalRefs(runId) <= 0) {
+        this.unwatch(runId);
+      }
+    } else {
+      this.webhookRefs.set(runId, refs);
+    }
+    return true;
+  }
+
+  private totalRefs(runId: string): number {
+    return (this.sseRefs.get(runId) ?? 0) + (this.webhookRefs.get(runId) ?? 0);
+  }
+
+  private async ensureWatching(runId: string): Promise<RunState | null> {
     if (this.watchers.has(runId)) {
       return this.cache.get(runId) ?? null;
     }
@@ -588,7 +804,6 @@ export class RunWatcher extends EventEmitter {
 
     const TERMINAL = new Set(["completed", "failed", "interrupted", "stopped"]);
 
-    // Debounced update: batch rapid file-change bursts into one re-read
     let debounce: ReturnType<typeof setTimeout> | null = null;
     const scheduleUpdate = () => {
       if (debounce) clearTimeout(debounce);
@@ -598,8 +813,7 @@ export class RunWatcher extends EventEmitter {
         if (newState) {
           this.cache.set(runId, newState);
           this.emit("update", runId, newState);
-          // Once a run reaches a terminal state, stop the expensive file watcher
-          // and polling. The cache stays alive for any SSE clients still connected.
+          void this.dispatchProgressWebhooks(runId, newState);
           if (TERMINAL.has(newState.run.status ?? "") || TERMINAL.has(newState.computedStatus ?? "")) {
             this.watchers.get(runId)?.close();
             this.watchers.delete(runId);
@@ -609,9 +823,6 @@ export class RunWatcher extends EventEmitter {
       }, 500);
     };
 
-    // Watch only state-relevant files using polling to avoid EMFILE.
-    // usePolling replaces kqueue/inotify with setInterval+stat so no file
-    // descriptors are consumed regardless of how deep the directory tree is.
     const fsWatcher = chokidar.watch(runDir, {
       persistent: false,
       ignoreInitial: true,
@@ -623,7 +834,6 @@ export class RunWatcher extends EventEmitter {
           "progress.ndjson", "final.json", "checkpoint.json",
           "run.json", "live.json", "manifest.json",
         ]);
-        // Let directories through so chokidar can recurse into restart-N/ subdirs
         if (!base.includes(".")) return false;
         return !STATE_FILES.has(base);
       },
@@ -632,7 +842,6 @@ export class RunWatcher extends EventEmitter {
     const isTerminal = state && (TERMINAL.has(state.run.status ?? "") || TERMINAL.has(state.computedStatus ?? ""));
 
     if (isTerminal) {
-      // Run already finished — no need to watch or poll, just return cached state
       fsWatcher.close();
     } else {
       fsWatcher.on("change", scheduleUpdate);
@@ -647,15 +856,18 @@ export class RunWatcher extends EventEmitter {
     return state;
   }
 
-  /** Called when an SSE connection closes. Tears down the watcher when all clients disconnect. */
-  sseDisconnect(runId: string) {
-    const refs = (this.sseRefs.get(runId) ?? 1) - 1;
-    if (refs <= 0) {
-      this.sseRefs.delete(runId);
-      this.unwatch(runId);
-    } else {
-      this.sseRefs.set(runId, refs);
-    }
+  private async dispatchProgressWebhooks(runId: string, state: RunState): Promise<void> {
+    const perRun = this.progressWebhooks.get(runId);
+    if (!perRun || perRun.size === 0) return;
+    await Promise.all(
+      [...perRun.values()].map(async (sub) => {
+        try {
+          await deliverProgressWebhook(sub, state);
+        } catch (error) {
+          sub.lastError = error instanceof Error ? error.message : String(error);
+        }
+      }),
+    );
   }
 
   private startPolling(runId: string, runDir: string) {
@@ -673,6 +885,7 @@ export class RunWatcher extends EventEmitter {
         if (!prev || newState.computedStatus !== prev.computedStatus || newState.containerAlive !== prev.containerAlive) {
           this.cache.set(runId, newState);
           this.emit("update", runId, newState);
+          void this.dispatchProgressWebhooks(runId, newState);
         }
         // Also stop polling when we detect terminal via newly-read state
         if (TERMINAL.has(newState.run.status ?? "") || TERMINAL.has(newState.computedStatus ?? "")) {
@@ -717,6 +930,7 @@ export class RunWatcher extends EventEmitter {
     this.watchers.delete(runId);
     this.stopPolling(runId);
     this.cache.delete(runId);
+    this.webhookRefs.delete(runId);
   }
 
   close() {

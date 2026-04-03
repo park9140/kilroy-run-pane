@@ -350,6 +350,62 @@ export function registerRoutes(
     res.json({ status: "ok" });
   });
 
+  app.get("/api/runs/:id/progress-webhooks", async (req: Request, res: Response) => {
+    const id = String(req.params["id"] ?? "");
+    const runDir = await watcher.findRunDir(id);
+    if (!runDir) {
+      res.status(404).json({ error: "run not found" });
+      return;
+    }
+    void runDir;
+    res.json({ subscriptions: watcher.listProgressWebhooks(id) });
+  });
+
+  app.post("/api/runs/:id/progress-webhooks", async (req: Request, res: Response) => {
+    const id = String(req.params["id"] ?? "");
+    const webhookUrl = String((req.body as { webhook_url?: string })?.webhook_url ?? "").trim();
+    const authToken = String((req.body as { auth_token?: string })?.auth_token ?? "").trim();
+    const threadId = String((req.body as { thread_id?: string })?.thread_id ?? "").trim();
+    const dashboardRunId = String((req.body as { dashboard_run_id?: string })?.dashboard_run_id ?? "").trim();
+    if (!webhookUrl) {
+      res.status(400).json({ error: "webhook_url required" });
+      return;
+    }
+    try {
+      const parsed = new URL(webhookUrl);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        res.status(400).json({ error: "webhook_url must be http or https" });
+        return;
+      }
+    } catch {
+      res.status(400).json({ error: "invalid webhook_url" });
+      return;
+    }
+
+    const subscription = await watcher.subscribeProgressWebhook(id, {
+      webhookUrl,
+      authToken,
+      threadId,
+      dashboardRunId,
+    });
+    if (!subscription) {
+      res.status(404).json({ error: "run not found" });
+      return;
+    }
+    res.status(201).json({ subscription });
+  });
+
+  app.delete("/api/runs/:id/progress-webhooks/:subscriptionId", async (req: Request, res: Response) => {
+    const id = String(req.params["id"] ?? "");
+    const subscriptionId = String(req.params["subscriptionId"] ?? "");
+    const removed = watcher.unsubscribeProgressWebhook(id, subscriptionId);
+    if (!removed) {
+      res.status(404).json({ error: "subscription not found" });
+      return;
+    }
+    res.json({ ok: true });
+  });
+
   // SSE stream for live run state updates
   app.get("/api/runs/:id/events", async (req: Request, res: Response) => {
     const id = String(req.params["id"] ?? "");

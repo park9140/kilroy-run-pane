@@ -13,10 +13,25 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   await writeFile(path, JSON.stringify(value), "utf8");
 }
 
-test("failed top-level stage overrides success final", async () => {
+test("successful final overrides stale failed top-level stage artifacts", async () => {
   const root = await makeRunDir();
   await mkdir(join(root, "deliver"), { recursive: true });
   await writeJson(join(root, "final.json"), { status: "success" });
+  await writeJson(join(root, "deliver", "status.json"), {
+    status: "fail",
+    failure_reason: "delivery failed",
+  });
+
+  const status = await readRunArtifactStatus(root);
+
+  assert.equal(status.status, "completed");
+  assert.equal(status.failureReason, undefined);
+  assert.equal(status.failedStage, undefined);
+});
+
+test("failed top-level stage remains terminal without successful final", async () => {
+  const root = await makeRunDir();
+  await mkdir(join(root, "deliver"), { recursive: true });
   await writeJson(join(root, "deliver", "status.json"), {
     status: "fail",
     failure_reason: "delivery failed",

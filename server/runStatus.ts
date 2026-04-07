@@ -150,6 +150,10 @@ export async function readRunArtifactStatus(runDir: string): Promise<RunArtifact
     readJsonFile(join(runDir, "live.json")).then(readLiveStatus),
   ]);
 
+  if (finalStatus?.status === "completed" || finalStatus?.status === "interrupted") {
+    return finalStatus;
+  }
+
   if (failedStage) {
     return {
       status: "failed",

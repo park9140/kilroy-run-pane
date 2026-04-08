@@ -188,9 +188,12 @@ export function registerRoutes(
       let started_at: string | null = null;
       let status = "running";
       let repo_path: string | null = null;
+      let manifestPresent = false;
+      let runJSONPresent = false;
       try {
         const manifestRaw = await readFile(join(runDir, "manifest.json"), "utf8");
         const manifest = JSON.parse(manifestRaw) as Record<string, unknown>;
+        manifestPresent = true;
         graph_name = String(manifest.graph_name ?? "");
         const repoPath = String(manifest.repo_path ?? "");
         repo_path = repoPath || null;
@@ -202,11 +205,18 @@ export function registerRoutes(
         try {
           const runRaw = await readFile(join(runDir, "run.json"), "utf8");
           const run = JSON.parse(runRaw) as Record<string, unknown>;
+          runJSONPresent = true;
           graph_name = String(run.dot_file ?? "");
           const repoPath = String(run.repo ?? "");
           repo_path = repoPath || null;
           repo = repoPath ? repoPath.split("/").pop() ?? null : null;
+          const goalStr = String((run.params as Record<string, unknown> | undefined)?.goal ?? "");
+          goal = goalStr ? goalStr.slice(0, 200) : null;
           started_at = typeof run.started_at === "string" ? run.started_at : null;
+          const rawStatus = String(run.status ?? "").trim().toLowerCase();
+          if (rawStatus) {
+            status = rawStatus;
+          }
         } catch { /* skip */ }
       }
 
@@ -221,9 +231,11 @@ export function registerRoutes(
         } catch { /* ok */ }
       }
 
-      const { readRunArtifactStatus } = await import("./runStatus.js");
-      const artifactStatus = await readRunArtifactStatus(runDir);
-      status = artifactStatus.status;
+      if (manifestPresent || !runJSONPresent) {
+        const { readRunArtifactStatus } = await import("./runStatus.js");
+        const artifactStatus = await readRunArtifactStatus(runDir);
+        status = artifactStatus.status;
+      }
 
       let notifications: unknown[] | null = null;
       if (includeNotifications) {
